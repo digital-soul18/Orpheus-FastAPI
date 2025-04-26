@@ -346,12 +346,22 @@
             let isHeaderReceived = false;
             let audioStarted = false;
             let totalAudioDuration = 0; // For RTF calculation
-            let bufferAheadSize = 3; // Number of chunks to buffer before playback
+            let bufferAheadSize = 2; // Reduced from 3 to 2 for faster initial playback
+            let headerBuffer = new Uint8Array(44); // Buffer for WAV header
+            let headerBufferPos = 0;
             
-            // Use a simplified approach with Web Audio API
+            // Initialize audio context only once to improve performance
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                audioContext.resume(); // Ensure context is running
             }
+            
+            // Clear any previously scheduled sources
+            scheduledSourceNodes.forEach(source => {
+                try { source.stop(); } catch (e) { /* Ignore */ }
+            });
+            scheduledSourceNodes = [];
+            nextPlayTime = 0;
             
             while (true) {
                 const { done, value } = await reader.read();
@@ -391,28 +401,46 @@
                 
                 // Process the audio chunk
                 try {
-                    // First chunk contains the WAV header
-                    if (!isHeaderReceived && value.length >= 44) {
-                        isHeaderReceived = true;
-                        console.log("WAV header received");
-                        
-                        // If first chunk has audio data after the header
-                        if (value.length > 44) {
-                            const audioData = value.slice(44);
-                            const audioBuffer = await createAudioBuffer(audioData, 24000);
+                    // Handle WAV header parsing
+                    if (!isHeaderReceived) {
+                        // If we don't have a complete header yet, fill our header buffer
+                        if (headerBufferPos < 44) {
+                            const bytesToCopy = Math.min(44 - headerBufferPos, value.length);
+                            headerBuffer.set(value.slice(0, bytesToCopy), headerBufferPos);
+                            headerBufferPos += bytesToCopy;
                             
-                            if (audioBuffer) {
-                                audioBuffers.push(audioBuffer);
-                                totalAudioDuration += audioBuffer.duration;
+                            // If we've completed the header
+                            if (headerBufferPos === 44) {
+                                isHeaderReceived = true;
+                                console.log("WAV header received");
+                                
+                                // Extract sample rate from header
+                                const sampleRate = new DataView(headerBuffer.buffer).getUint32(24, true);
+                                console.log(`Sample rate from WAV header: ${sampleRate} Hz`);
+                                
+                                // If there's audio data after the header in this chunk
+                                if (value.length > bytesToCopy) {
+                                    const audioData = value.slice(bytesToCopy);
+                                    const audioBuffer = await createAudioBuffer(audioData, sampleRate);
+                                    
+                                    if (audioBuffer) {
+                                        audioBuffers.push(audioBuffer);
+                                        totalAudioDuration += audioBuffer.duration;
+                                    }
+                                }
                             }
                         }
-                    }
-                    else if (isHeaderReceived) {
+                    } else {
                         // Process regular audio chunks
-                        const audioBuffer = await createAudioBuffer(value, 24000);
+                        const audioBuffer = await createAudioBuffer(value, 24000); // Using standard sample rate
                         if (audioBuffer) {
                             audioBuffers.push(audioBuffer);
                             totalAudioDuration += audioBuffer.duration;
+                            
+                            // Schedule playback if we're already playing
+                            if (audioStarted) {
+                                playAudioBuffers();
+                            }
                             
                             // Update RTF in real-time
                             const elapsedSeconds = (performance.now() - startTime) / 1000;
@@ -423,14 +451,14 @@
                         }
                     }
                     
-                    // Start playback when we have enough chunks or after a timeout
+                    // Start playback faster - as soon as we have enough initial data
                     if (!audioStarted && isHeaderReceived) {
                         const elapsedMs = performance.now() - startTime;
                         
                         // Start playback if:
                         // 1. We have accumulated enough audio data OR
-                        // 2. First chunk has been waiting too long (500ms)
-                        if (audioBuffers.length >= bufferAheadSize || elapsedMs > startTime + 500) {
+                        // 2. First chunk has been waiting for 250ms (reduced from 500ms)
+                        if (audioBuffers.length >= bufferAheadSize || elapsedMs > startTime + 250) {
                             if (audioBuffers.length > 0) {
                                 audioStarted = true;
                                 updateStatus('Playing audio stream...', 'playing');
@@ -464,10 +492,17 @@
                     pcmData[i] = int16Value / 32768.0;
                 }
                 
-                // Create an audio buffer (mono, using detected sample rate)
-                const audioBuffer = audioContext.createBuffer(1, pcmData.length, sampleRate);
-                // Copy the PCM data into the audio buffer
-                audioBuffer.getChannelData(0).set(pcmData);
+                // Create a stereo audio buffer (2 channels) for better compatibility
+                const audioBuffer = audioContext.createBuffer(2, pcmData.length, sampleRate);
+                
+                // Copy the PCM data into both channels (mono to stereo conversion)
+                const leftChannel = audioBuffer.getChannelData(0);
+                const rightChannel = audioBuffer.getChannelData(1);
+                
+                for (let i = 0; i < pcmData.length; i++) {
+                    leftChannel[i] = pcmData[i];
+                    rightChannel[i] = pcmData[i]; // Duplicate to right channel
+                }
                 
                 return audioBuffer;
             } catch (e) {
@@ -475,6 +510,10 @@
                 return null;
             }
         }
+        
+        // Maintain a queue of scheduled buffers for smoother playback
+        let scheduledSourceNodes = [];
+        let nextPlayTime = 0;
         
         function playAudioBuffers() {
             isPlaying = true;
@@ -485,37 +524,54 @@
                 return;
             }
             
-            // Create a new source
-            audioSource = audioContext.createBufferSource();
+            // Initialize nextPlayTime if this is the first buffer
+            if (nextPlayTime === 0) {
+                nextPlayTime = audioContext.currentTime;
+            }
             
-            // Get the first buffer
-            const buffer = audioBuffers.shift();
-            audioSource.buffer = buffer;
-            
-            // Connect to output
-            audioSource.connect(audioContext.destination);
-            
-            // Start playing
-            audioSource.start();
-            
-            // When this buffer is done, play the next buffer if available
-            audioSource.onended = () => {
-                if (audioBuffers.length > 0 && isPlaying) {
-                    // Continue playing the next buffer
-                    playAudioBuffers();
-                } else {
-                    // No more buffers, check if more come in later
-                    isPlaying = false;
-                    setTimeout(() => {
-                        if (audioBuffers.length > 0 && !isPlaying) {
-                            playAudioBuffers();
-                        }
-                    }, 50);
-                }
-            };
+            // Schedule all available buffers ahead of time
+            while (audioBuffers.length > 0) {
+                const buffer = audioBuffers.shift();
+                
+                // Create a new source for this buffer
+                const source = audioContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioContext.destination);
+                
+                // Schedule this buffer to play at the correct time
+                source.start(nextPlayTime);
+                
+                // Calculate when the next buffer should start
+                nextPlayTime += buffer.duration;
+                
+                // Add to our list of scheduled sources
+                scheduledSourceNodes.push(source);
+                
+                // When this source ends, remove it from our list
+                source.onended = () => {
+                    const index = scheduledSourceNodes.indexOf(source);
+                    if (index !== -1) {
+                        scheduledSourceNodes.splice(index, 1);
+                    }
+                    
+                    // If all scheduled nodes are done and we have no more buffers,
+                    // reset playback state
+                    if (scheduledSourceNodes.length === 0 && audioBuffers.length === 0) {
+                        isPlaying = false;
+                        nextPlayTime = 0;
+                    }
+                };
+            }
         }
         
         function stopPlayback() {
+            // Stop all scheduled audio sources
+            scheduledSourceNodes.forEach(source => {
+                try { source.stop(); } catch (e) { /* Ignore */ }
+            });
+            scheduledSourceNodes = [];
+            nextPlayTime = 0;
+            
             if (audioSource) {
                 audioSource.stop();
                 audioSource = null;
