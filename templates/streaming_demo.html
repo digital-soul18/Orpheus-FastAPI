@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orpheus TTS Streaming Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .control-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        #audio-controls {
+            width: 100%;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-top: 20px;
+        }
+        .audio-visualization {
+            margin-top: 10px;
+            height: 100px;
+            background-color: #eee;
+            position: relative;
+            overflow: hidden;
+            border-radius: 4px;
+        }
+        .waveform {
+            height: 100%;
+            width: 100%;
+            position: absolute;
+        }
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status-ready {
+            background-color: #e7f3ff;
+            color: #0066cc;
+        }
+        .status-loading {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .status-playing {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status-error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .metrics {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .metric-card {
+            flex: 1;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .metric-label {
+            color: #666;
+            font-size: 14px;
+        }
+        #player {
+            width: 100%;
+            margin-top: 10px;
+        }
+        .emotion-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .emotion-tag {
+            background-color: #e9ecef;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .emotion-tag:hover {
+            background-color: #dde2e6;
+        }
+    </style>
+</head>
+<body>
+    <h1>Orpheus TTS Streaming Demo</h1>
+    
+    <div class="form-group">
+        <label for="text-input">Enter text to convert to speech:</label>
+        <textarea id="text-input" placeholder="Type or paste text here...">Welcome to Orpheus, a high-quality text-to-speech system. It converts text to natural sounding audio using advanced deep learning models.</textarea>
+    </div>
+    
+    <div class="form-group">
+        <label for="voice-select">Select Voice:</label>
+        <select id="voice-select">
+            <option value="tara">Tara</option>
+            <option value="zac">Zac</option>
+            <option value="leah">Leah</option>
+        </select>
+    </div>
+    
+    <div class="form-group">
+        <label>Emotion Tags:</label>
+        <div class="emotion-tags">
+            <span class="emotion-tag" onclick="addEmotionTag('happy')">happy</span>
+            <span class="emotion-tag" onclick="addEmotionTag('sad')">sad</span>
+            <span class="emotion-tag" onclick="addEmotionTag('excited')">excited</span>
+            <span class="emotion-tag" onclick="addEmotionTag('contemplative')">contemplative</span>
+            <span class="emotion-tag" onclick="addEmotionTag('laugh')">laugh</span>
+            <span class="emotion-tag" onclick="addEmotionTag('sigh')">sigh</span>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <div class="control-buttons">
+            <button id="generate-btn" onclick="generateSpeech()">Generate Speech</button>
+            <button id="stop-btn" onclick="stopPlayback()" disabled>Stop</button>
+        </div>
+        <div>
+            <input type="checkbox" id="stream-checkbox" checked>
+            <label for="stream-checkbox">Use Streaming</label>
+        </div>
+    </div>
+    
+    <div id="status" class="status-ready">Ready</div>
+    
+    <div id="audio-controls">
+        <audio id="player" controls></audio>
+    </div>
+    
+    <div class="metrics">
+        <div class="metric-card">
+            <div class="metric-label">Time to First Audio</div>
+            <div class="metric-value" id="ttfb">-</div>
+            <div class="metric-label">milliseconds</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Total Generation Time</div>
+            <div class="metric-value" id="total-time">-</div>
+            <div class="metric-label">seconds</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Characters Per Second</div>
+            <div class="metric-value" id="chars-per-second">-</div>
+            <div class="metric-label">chars/s</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Real-Time Factor (RTF)</div>
+            <div class="metric-value" id="rtf">-</div>
+            <div class="metric-label">x realtime</div>
+        </div>
+    </div>
+    
+    <script>
+        let audioContext;
+        let audioBuffers = [];
+        let audioSource;
+        let startTime;
+        let ttfbTime;
+        let totalTime;
+        let textLength;
+        let isStreaming = true;
+        let isPlaying = false;
+        
+        function updateStatus(message, type) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = message;
+            statusElement.className = ''; // Clear previous classes
+            statusElement.classList.add(`status-${type}`);
+        }
+        
+        function addEmotionTag(emotion) {
+            const textInput = document.getElementById('text-input');
+            textInput.value = `<${emotion}>${textInput.value}`;
+        }
+        
+        async function generateSpeech() {
+            // Reset previous audio
+            audioBuffers = [];
+            if (audioSource) {
+                audioSource.stop();
+                audioSource = null;
+            }
+            
+            const textInput = document.getElementById('text-input').value.trim();
+            if (!textInput) {
+                updateStatus('Please enter some text', 'error');
+                return;
+            }
+            
+            const voice = document.getElementById('voice-select').value;
+            isStreaming = document.getElementById('stream-checkbox').checked;
+            textLength = textInput.length;
+            
+            // Update UI
+            document.getElementById('generate-btn').disabled = true;
+            document.getElementById('stop-btn').disabled = false;
+            updateStatus('Generating speech...', 'loading');
+            
+            // Reset metrics
+            document.getElementById('ttfb').textContent = '-';
+            document.getElementById('total-time').textContent = '-';
+            document.getElementById('chars-per-second').textContent = '-';
+            
+            startTime = performance.now();
+            ttfbTime = null;
+            
+            try {
+                const endpoint = isStreaming ? '/v1/audio/speech/stream' : '/v1/audio/speech';
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        input: textInput,
+                        model: 'orpheus',
+                        voice: voice,
+                        response_format: 'wav',
+                        speed: 1
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                if (isStreaming) {
+                    // Handle streaming response
+                    const reader = response.body.getReader();
+                    const player = document.getElementById('player');
+                    
+                    // Initialize AudioContext
+                    if (!audioContext) {
+                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    
+                    // Process the stream
+                    processStream(reader);
+                } else {
+                    // Non-streaming response
+                    const blob = await response.blob();
+                    if (!ttfbTime) {
+                        ttfbTime = performance.now();
+                        document.getElementById('ttfb').textContent = Math.round(ttfbTime - startTime);
+                    }
+                    
+                    totalTime = performance.now() - startTime;
+                    document.getElementById('total-time').textContent = (totalTime / 1000).toFixed(2);
+                    document.getElementById('chars-per-second').textContent = Math.round(textLength / (totalTime / 1000));
+                    
+                    const audioUrl = URL.createObjectURL(blob);
+                    document.getElementById('player').src = audioUrl;
+                    document.getElementById('player').play();
+                    
+                    updateStatus('Playback started', 'playing');
+                    isPlaying = true;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                updateStatus(`Error: ${error.message}`, 'error');
+                document.getElementById('generate-btn').disabled = false;
+                document.getElementById('stop-btn').disabled = true;
+            }
+        }
+        
+        async function processStream(reader) {
+            // Collect chunks for complete audio when done
+            const chunks = [];
+            let processedFirstChunk = false;
+            let isHeaderReceived = false;
+            let audioStarted = false;
+            let totalAudioDuration = 0; // For RTF calculation
+            let bufferAheadSize = 3; // Number of chunks to buffer before playback
+            
+            // Use a simplified approach with Web Audio API
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) {
+                    // End of stream
+                    totalTime = performance.now() - startTime;
+                    const totalTimeSeconds = totalTime / 1000;
+                    document.getElementById('total-time').textContent = totalTimeSeconds.toFixed(2);
+                    document.getElementById('chars-per-second').textContent = Math.round(textLength / totalTimeSeconds);
+                    
+                    // Calculate RTF (Real-Time Factor)
+                    if (totalAudioDuration > 0) {
+                        const rtf = totalTimeSeconds / totalAudioDuration;
+                        document.getElementById('rtf').textContent = rtf.toFixed(2);
+                    }
+                    
+                    updateStatus('Generation complete', 'ready');
+                    document.getElementById('generate-btn').disabled = false;
+                    
+                    // Create a complete audio file from all chunks for the audio player
+                    const blob = new Blob(chunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(blob);
+                    document.getElementById('player').src = audioUrl;
+                    break;
+                }
+                
+                // Record time to first byte if this is the first chunk
+                if (!processedFirstChunk) {
+                    ttfbTime = performance.now();
+                    document.getElementById('ttfb').textContent = Math.round(ttfbTime - startTime);
+                    processedFirstChunk = true;
+                    updateStatus('Receiving audio stream...', 'loading');
+                }
+                
+                chunks.push(value);
+                
+                // Process the audio chunk
+                try {
+                    // First chunk contains the WAV header
+                    if (!isHeaderReceived && value.length >= 44) {
+                        isHeaderReceived = true;
+                        console.log("WAV header received");
+                        
+                        // If first chunk has audio data after the header
+                        if (value.length > 44) {
+                            const audioData = value.slice(44);
+                            const audioBuffer = await createAudioBuffer(audioData, 24000);
+                            
+                            if (audioBuffer) {
+                                audioBuffers.push(audioBuffer);
+                                totalAudioDuration += audioBuffer.duration;
+                            }
+                        }
+                    }
+                    else if (isHeaderReceived) {
+                        // Process regular audio chunks
+                        const audioBuffer = await createAudioBuffer(value, 24000);
+                        if (audioBuffer) {
+                            audioBuffers.push(audioBuffer);
+                            totalAudioDuration += audioBuffer.duration;
+                            
+                            // Update RTF in real-time
+                            const elapsedSeconds = (performance.now() - startTime) / 1000;
+                            if (totalAudioDuration > 0) {
+                                const currentRtf = elapsedSeconds / totalAudioDuration;
+                                document.getElementById('rtf').textContent = currentRtf.toFixed(2);
+                            }
+                        }
+                    }
+                    
+                    // Start playback when we have enough chunks or after a timeout
+                    if (!audioStarted && isHeaderReceived) {
+                        const elapsedMs = performance.now() - startTime;
+                        
+                        // Start playback if:
+                        // 1. We have accumulated enough audio data OR
+                        // 2. First chunk has been waiting too long (500ms)
+                        if (audioBuffers.length >= bufferAheadSize || elapsedMs > startTime + 500) {
+                            if (audioBuffers.length > 0) {
+                                audioStarted = true;
+                                updateStatus('Playing audio stream...', 'playing');
+                                playAudioBuffers();
+                            }
+                        } else {
+                            // Still buffering
+                            updateStatus('Buffering audio...', 'loading');
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error processing audio chunk:', e);
+                }
+            }
+        }
+        
+        // Helper function to create audio buffer from raw PCM data
+        async function createAudioBuffer(chunk, sampleRate = 24000) {
+            if (!chunk || chunk.length === 0) return null;
+            
+            try {
+                // Convert the Uint8Array to Float32Array for audio processing
+                const pcmData = new Float32Array(chunk.length / 2);
+                const dataView = new DataView(chunk.buffer);
+                
+                // Convert 16-bit PCM to Float32
+                for (let i = 0; i < chunk.length / 2; i++) {
+                    // Get the 16-bit sample
+                    const int16Value = dataView.getInt16(i * 2, true); // true for little-endian
+                    // Convert to float [-1.0, 1.0]
+                    pcmData[i] = int16Value / 32768.0;
+                }
+                
+                // Create an audio buffer (mono, using detected sample rate)
+                const audioBuffer = audioContext.createBuffer(1, pcmData.length, sampleRate);
+                // Copy the PCM data into the audio buffer
+                audioBuffer.getChannelData(0).set(pcmData);
+                
+                return audioBuffer;
+            } catch (e) {
+                console.error('Error creating audio buffer:', e);
+                return null;
+            }
+        }
+        
+        function playAudioBuffers() {
+            isPlaying = true;
+            
+            // If no buffers available, exit
+            if (audioBuffers.length === 0) {
+                isPlaying = false;
+                return;
+            }
+            
+            // Create a new source
+            audioSource = audioContext.createBufferSource();
+            
+            // Get the first buffer
+            const buffer = audioBuffers.shift();
+            audioSource.buffer = buffer;
+            
+            // Connect to output
+            audioSource.connect(audioContext.destination);
+            
+            // Start playing
+            audioSource.start();
+            
+            // When this buffer is done, play the next buffer if available
+            audioSource.onended = () => {
+                if (audioBuffers.length > 0 && isPlaying) {
+                    // Continue playing the next buffer
+                    playAudioBuffers();
+                } else {
+                    // No more buffers, check if more come in later
+                    isPlaying = false;
+                    setTimeout(() => {
+                        if (audioBuffers.length > 0 && !isPlaying) {
+                            playAudioBuffers();
+                        }
+                    }, 50);
+                }
+            };
+        }
+        
+        function stopPlayback() {
+            if (audioSource) {
+                audioSource.stop();
+                audioSource = null;
+            }
+            audioBuffers = [];
+            isPlaying = false;
+            document.getElementById('player').pause();
+            document.getElementById('generate-btn').disabled = false;
+            document.getElementById('stop-btn').disabled = true;
+            updateStatus('Playback stopped', 'ready');
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateStatus('Ready to generate speech', 'ready');
+            
+            // Handle audio player events
+            const player = document.getElementById('player');
+            player.addEventListener('play', () => {
+                document.getElementById('stop-btn').disabled = false;
+                updateStatus('Playing audio', 'playing');
+            });
+            
+            player.addEventListener('pause', () => {
+                document.getElementById('stop-btn').disabled = true;
+                updateStatus('Playback paused', 'ready');
+            });
+            
+            player.addEventListener('ended', () => {
+                document.getElementById('stop-btn').disabled = true;
+                updateStatus('Playback complete', 'ready');
+            });
+        });
+    </script>
+</body>
+</html>

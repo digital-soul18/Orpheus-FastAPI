@@ -229,7 +229,7 @@ async def stream_speech_api(request: StreamingSpeechRequest):
     async def audio_stream_generator():
         nonlocal chunk_count, total_bytes
         
-        # Always stream WAV data (int16 PCM with header)
+        # Split long text into batches for better reliability
         if len(request.input) > 1000:
             from tts_engine.inference import split_text_into_sentences
             sentences = split_text_into_sentences(request.input)
@@ -245,40 +245,71 @@ async def stream_speech_api(request: StreamingSpeechRequest):
         else:
             batches = [request.input]
 
-        chunk_duration_ms = 50  # 50ms chunks for smoother playback
+        # Set chunk size for buffer management
+        chunk_duration_ms = 100  # 100ms is a good balance of latency and smoothness
         samples_per_chunk = int(24000 * (chunk_duration_ms / 1000))
-        int16_chunk_bytes = samples_per_chunk * 2
+        chunk_bytes = samples_per_chunk * 2
+        
+        # Simple buffer for accumulating audio data
         buffer = bytearray()
-
-        # Yield a standard WAV header
+        
+        # Send WAV header immediately
         wav_header = generate_wav_header(sample_rate=24000, bits_per_sample=16, channels=1)
         yield wav_header
         total_bytes += len(wav_header)
-
+        
+        # For tracking RTF
+        generation_start_time = time.time()
+        audio_duration_ms = 0
+        
         try:
-            # Always use int16 PCM for WAV
-            for batch in batches:
+            # Process all text batches
+            for batch_idx, batch in enumerate(batches):
                 async for audio_chunk in stream_speech_from_api(prompt=batch, voice=request.voice, output_format="int16"):
                     if not audio_chunk:
                         continue
+                    
+                    chunk_count += 1
+                    chunk_samples = len(audio_chunk) // 2
+                    chunk_duration_ms = (chunk_samples / 24000) * 1000
+                    audio_duration_ms += chunk_duration_ms
+                    
+                    # Add chunk to buffer
                     buffer.extend(audio_chunk)
-                    # Yield full chunks
-                    chunk_bytes = samples_per_chunk * 2
-                    while len(buffer) >= chunk_bytes:
-                        chunk = bytes(buffer[:chunk_bytes])
-                        total_bytes += len(chunk)
-                        yield chunk
-                        del buffer[:chunk_bytes]
-                        await asyncio.sleep(chunk_duration_ms / 1000)
-            # Flush remaining buffer padded to full chunk
+                    
+                    # Send data if we have enough for a full chunk (or it's the first chunk)
+                    if len(buffer) >= chunk_bytes or chunk_count == 1:
+                        # Send first chunk immediately
+                        if chunk_count == 1:
+                            yield bytes(buffer)
+                            total_bytes += len(buffer)
+                            buffer = bytearray()
+                        else:
+                            # For subsequent chunks, send in consistent sizes
+                            while len(buffer) >= chunk_bytes:
+                                chunk = bytes(buffer[:chunk_bytes])
+                                yield chunk
+                                total_bytes += len(chunk)
+                                del buffer[:chunk_bytes]
+                
+                # Small pause between batches to avoid blending sentences
+                if batch_idx < len(batches) - 1:
+                    await asyncio.sleep(0.01)
+            
+            # Send any remaining data
             if buffer:
-                chunk_bytes = samples_per_chunk * 2
-                pad_len = chunk_bytes - len(buffer)
-                chunk = bytes(buffer) + b"\x00" * pad_len
-                total_bytes += len(chunk)
-                yield chunk
+                yield bytes(buffer)
+                total_bytes += len(buffer)
+                
+            # Calculate and log RTF
+            elapsed_ms = (time.time() - generation_start_time) * 1000
+            rtf = elapsed_ms / max(1, audio_duration_ms)
+            print(f"Stream RTF: {rtf:.2f} (generation: {elapsed_ms:.2f}ms, audio: {audio_duration_ms:.2f}ms)")
+                
         except Exception as e:
             print(f"Error in streaming audio: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             # Log performance metrics
             elapsed = time.time() - start_time
@@ -380,6 +411,17 @@ async def web_ui(request: Request):
             "config": config,
             "VOICE_TO_LANGUAGE": VOICE_TO_LANGUAGE,
             "AVAILABLE_LANGUAGES": AVAILABLE_LANGUAGES
+        }
+    )
+
+@app.get("/stream-demo", response_class=HTMLResponse)
+async def stream_demo(request: Request):
+    """Streaming demo UI for TTS generation"""
+    return templates.TemplateResponse(
+        "streaming_demo.html",
+        {
+            "request": request,
+            "voices": AVAILABLE_VOICES
         }
     )
 

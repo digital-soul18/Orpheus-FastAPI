@@ -41,7 +41,7 @@ High-performance Text-to-Speech server with OpenAI-compatible API, multilingual 
 - 📊 Implemented detailed performance reporting for audio generation
 - ⚠️ Note: Python 3.12 is not supported due to removal of pkgutil.ImpImporter
 
-[GitHub Repository](https://github.com/Lex-au/Orpheus-FastAPI)
+[GitHub Repository](https://github.com/timonharz/Orpheus-FastAPI)
 
 ## Model Collection
 
@@ -129,7 +129,7 @@ The system will automatically download the specified model from Hugging Face bef
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/Lex-au/Orpheus-FastAPI.git
+git clone https://github.com/timonharz/Orpheus-FastAPI.git
 cd Orpheus-FastAPI
 ```
 

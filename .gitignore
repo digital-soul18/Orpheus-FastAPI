@@ -4,3 +4,27 @@ __pycache__/
 venv/
 models/
 *.gguf
+*.bin
+
+# Audio outputs
+outputs/
+*.wav
+*.mp3
+
+# Logs
+*.log
+logs/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Benchmark results
+benchmark_results/
+*.json
+
+# Notebooks
+.ipynb_checkpoints/
