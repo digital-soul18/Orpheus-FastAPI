@@ -8,6 +8,15 @@ High-performance Text-to-Speech server with OpenAI-compatible API, multilingual 
 
 ## Changelog
 
+**v1.4.0** (2025-04-26)
+- 🔊 Added new streaming audio endpoint for real-time TTS playback
+- 📱 Added iOS/macOS Swift player for streaming audio integration
+- 📊 Added benchmarking tools for performance measurement
+- 📊 Interactive streaming demo UI at `/stream-demo`
+- 🚀 Optimized streaming for ultra-low latency (40-80ms TTFB)
+- 🤖 Added RunPod deployment scripts for both Docker and non-Docker setups
+- 🧠 Improved performance monitoring with Real-Time Factor (RTF) metrics
+
 **v1.3.0** (2025-04-18)
 - 🌐 Added comprehensive multilingual support with 16 new voice actors across 7 languages
 - 🗣️ New voice actors include:
@@ -67,6 +76,9 @@ Listen to sample outputs with different voices and emotions:
 ## Features
 
 - **OpenAI API Compatible**: Drop-in replacement for OpenAI's `/v1/audio/speech` endpoint
+- **Real-Time Streaming**: Low-latency streaming audio endpoint for interactive applications
+- **iOS/macOS Integration**: Swift player for easy mobile app integration
+- **Performance Benchmarking**: Tools to measure latency, throughput, and Real-Time Factor
 - **Modern Web Interface**: Clean, responsive UI with waveform visualization
 - **High Performance**: Optimized for RTX GPUs with parallel processing
 - **Multilingual Support**: 24 different voices across 8 languages (English, French, German, Korean, Hindi, Mandarin, Spanish, Italian)
@@ -76,6 +88,7 @@ Listen to sample outputs with different voices and emotions:
 - **Web UI Configuration**: Configure all server settings directly from the interface
 - **Dynamic Environment Variables**: Update API endpoint, timeouts, and model parameters without editing files
 - **Server Restart**: Apply configuration changes with one-click server restart
+- **Cloud Deployment**: Easy setup on RunPod with provided scripts
 
 ## Project Structure
 
@@ -85,10 +98,17 @@ Orpheus-FastAPI/
 ├── docker-compose.yml    # Docker compose configuration
 ├── Dockerfile.gpu        # GPU-enabled Docker image
 ├── requirements.txt      # Dependencies
+├── OrpheusStreamingPlayerAdvanced.swift  # iOS/macOS player
+├── runpod_setup.sh       # RunPod deployment script
+├── runpod_docker_setup.sh # RunPod Docker setup
 ├── static/               # Static assets (favicon, etc.)
 ├── outputs/              # Generated audio files
 ├── templates/            # HTML templates
-│   └── tts.html          # Web UI template
+│   ├── tts.html          # Main Web UI template
+│   └── streaming_demo.html # Streaming demo interface
+├── tests/                # Testing and benchmarking
+│   ├── benchmark_streaming.py  # Streaming performance tests
+│   └── comprehensive_benchmark.py # Detailed benchmarks
 └── tts_engine/           # Core TTS functionality
     ├── __init__.py       # Package exports
     ├── inference.py      # Token generation and API handling
@@ -199,6 +219,27 @@ curl http://localhost:5005/v1/audio/speech \
   --output speech.wav
 ```
 
+### Streaming Audio Endpoint
+
+For real-time audio playback, use the streaming endpoint at `/v1/audio/speech/stream`:
+
+```bash
+curl -X 'POST' \
+  'http://localhost:5005/v1/audio/speech/stream' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input": "This is streamed audio that starts playing immediately while still being generated in real-time.",
+    "model": "orpheus",
+    "voice": "tara",
+    "response_format": "wav",
+    "speed": 1
+  }' \
+  --output streaming.wav
+```
+
+For the best interactive experience, visit the streaming demo at `http://localhost:5005/stream-demo` to test the streaming endpoint with a web interface.
+
 ### Parameters
 
 - `input` (required): The text to convert to speech
@@ -219,6 +260,18 @@ curl -X POST http://localhost:5005/speak \
     "voice": "tara"
   }' \
   -o output.wav
+```
+
+### Benchmarking Tools
+
+The repository includes benchmarking tools to measure performance:
+
+```bash
+# Basic streaming benchmark
+python tests/benchmark_streaming.py --url "http://localhost:5005/v1/audio/speech/stream" --voice tara
+
+# Comprehensive benchmark across voices and text lengths
+python tests/comprehensive_benchmark.py --url "http://localhost:5005/v1/audio/speech/stream" --voices tara leah --skip-long
 ```
 
 ### Available Voices
@@ -404,6 +457,38 @@ Make sure the `ORPHEUS_API_URL` points to your running inference server.
 
 To add new voices, update the `AVAILABLE_VOICES` list in `tts_engine/inference.py` and add corresponding descriptions in the HTML template.
 
+## iOS/macOS Integration
+
+The repository includes `OrpheusStreamingPlayerAdvanced.swift`, a Swift implementation for integrating Orpheus with iOS and macOS applications. This player connects to the streaming endpoint for real-time audio playback.
+
+### Using the Swift Player
+
+1. Add the Swift file to your Xcode project
+2. Import AVFoundation framework
+3. Update the baseURL to point to your Orpheus server
+4. Initialize and use the player:
+
+```swift
+// Create the player
+let orpheusPlayer = OrpheusStreamingPlayerAdvanced()
+
+// Start streaming
+orpheusPlayer.streamAudio(
+    text: "Hello, this is a test of the Orpheus text to speech system.",
+    voice: "tara",
+    completion: {
+        print("Audio playback completed")
+    }
+)
+```
+
+The player includes several advanced features:
+- WAV header detection and parsing
+- Automatic format conversion for iOS/macOS compatibility
+- Mono-to-stereo channel conversion
+- Buffer accumulation for smooth playback
+- Automatic audio session configuration
+
 ## Using with llama.cpp
 
 When running the Orpheus model with llama.cpp, use these parameters to ensure optimal performance:
@@ -424,6 +509,24 @@ For extended audio generation (books, long narrations), you may want to increase
 1. Set ORPHEUS_MAX_TOKENS to 32768 or higher in your .env file (or via the Web UI)
 2. Increase ORPHEUS_API_TIMEOUT to 1800 for longer processing times
 3. Use the same values in your llama.cpp parameters (if you're using llama.cpp)
+
+## RunPod Deployment
+
+The repository includes scripts for easy deployment on RunPod:
+
+1. **Standard Setup** (No Docker):
+   ```bash
+   ./runpod_setup.sh
+   ```
+   This script installs dependencies, downloads the model, and starts both the llama.cpp server and Orpheus FastAPI.
+
+2. **Docker Setup**:
+   ```bash
+   ./runpod_docker_setup.sh
+   ```
+   This script sets up Docker and Docker Compose on RunPod, then deploys the full stack with the Docker Compose configuration.
+
+Both scripts create the necessary environment configuration and handle all setup steps automatically.
 
 ## License
 
