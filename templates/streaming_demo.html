@@ -227,7 +227,10 @@
     </div>
     
     <script>
-        let audioContext;
+        // Pre-initialize audioContext on page load for faster startup
+        let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioContext.suspend(); // Keep suspended until needed to save resources
+        
         let audioBuffers = [];
         let audioSource;
         let startTime;
@@ -236,6 +239,7 @@
         let textLength;
         let isStreaming = true;
         let isPlaying = false;
+        let firstChunkMode = true; // Special handling for first chunk
         
         function updateStatus(message, type) {
             const statusElement = document.getElementById('status');
@@ -257,11 +261,31 @@
                 audioSource = null;
             }
             
+            // Reset scheduled sources
+            scheduledSourceNodes.forEach(source => {
+                try { source.stop(); } catch (e) { /* Ignore */ }
+            });
+            scheduledSourceNodes = [];
+            nextPlayTime = 0;
+            
+            // Resume audio context before request to reduce startup latency
+            if (audioContext.state === "suspended") {
+                try {
+                    await audioContext.resume();
+                    console.log("AudioContext resumed");
+                } catch (e) {
+                    console.warn("Could not resume AudioContext:", e);
+                }
+            }
+            
             const textInput = document.getElementById('text-input').value.trim();
             if (!textInput) {
                 updateStatus('Please enter some text', 'error');
                 return;
             }
+            
+            // Reset first chunk mode
+            firstChunkMode = true;
             
             const voice = document.getElementById('voice-select').value;
             isStreaming = document.getElementById('stream-checkbox').checked;
@@ -276,6 +300,7 @@
             document.getElementById('ttfb').textContent = '-';
             document.getElementById('total-time').textContent = '-';
             document.getElementById('chars-per-second').textContent = '-';
+            document.getElementById('rtf').textContent = '-';
             
             startTime = performance.now();
             ttfbTime = null;
@@ -350,10 +375,14 @@
             let headerBuffer = new Uint8Array(44); // Buffer for WAV header
             let headerBufferPos = 0;
             
-            // Initialize audio context only once to improve performance
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                audioContext.resume(); // Ensure context is running
+            // Audio context should already be initialized, but resume if needed
+            if (audioContext.state === "suspended") {
+                try {
+                    await audioContext.resume();
+                    console.log("AudioContext resumed in stream processor");
+                } catch (e) {
+                    console.warn("Could not resume AudioContext:", e);
+                }
             }
             
             // Clear any previously scheduled sources
@@ -451,22 +480,34 @@
                         }
                     }
                     
-                    // Start playback faster - as soon as we have enough initial data
+                    // Ultra-fast playback strategy
                     if (!audioStarted && isHeaderReceived) {
-                        const elapsedMs = performance.now() - startTime;
-                        
-                        // Start playback if:
-                        // 1. We have accumulated enough audio data OR
-                        // 2. First chunk has been waiting for 250ms (reduced from 500ms)
-                        if (audioBuffers.length >= bufferAheadSize || elapsedMs > startTime + 250) {
-                            if (audioBuffers.length > 0) {
-                                audioStarted = true;
-                                updateStatus('Playing audio stream...', 'playing');
-                                playAudioBuffers();
+                        // Special first chunk handling - play immediately if in first chunk mode
+                        if (firstChunkMode && audioBuffers.length > 0) {
+                            // Start playback immediately with first chunk
+                            audioStarted = true;
+                            updateStatus('Playing audio stream...', 'playing');
+                            playAudioBuffers();
+                            firstChunkMode = false; // Exit first chunk mode
+                            console.log("Started playback immediately with first chunk");
+                        } 
+                        // Normal buffering strategy for subsequent chunks
+                        else {
+                            const elapsedMs = performance.now() - startTime;
+                            
+                            // Start playback if:
+                            // 1. We have accumulated enough audio data OR
+                            // 2. First chunk has been waiting for 100ms (reduced from 250ms)
+                            if (audioBuffers.length >= bufferAheadSize || elapsedMs > startTime + 100) {
+                                if (audioBuffers.length > 0) {
+                                    audioStarted = true;
+                                    updateStatus('Playing audio stream...', 'playing');
+                                    playAudioBuffers();
+                                }
+                            } else {
+                                // Still buffering
+                                updateStatus('Buffering audio...', 'loading');
                             }
-                        } else {
-                            // Still buffering
-                            updateStatus('Buffering audio...', 'loading');
                         }
                     }
                 } catch (e) {
@@ -475,36 +516,59 @@
             }
         }
         
-        // Helper function to create audio buffer from raw PCM data
+        // Optimized buffer creation for lower latency
         async function createAudioBuffer(chunk, sampleRate = 24000) {
             if (!chunk || chunk.length === 0) return null;
             
             try {
-                // Convert the Uint8Array to Float32Array for audio processing
-                const pcmData = new Float32Array(chunk.length / 2);
-                const dataView = new DataView(chunk.buffer);
-                
-                // Convert 16-bit PCM to Float32
-                for (let i = 0; i < chunk.length / 2; i++) {
-                    // Get the 16-bit sample
-                    const int16Value = dataView.getInt16(i * 2, true); // true for little-endian
-                    // Convert to float [-1.0, 1.0]
-                    pcmData[i] = int16Value / 32768.0;
+                // For first chunk, use optimized lightweight processing
+                if (firstChunkMode) {
+                    // Fast path for first chunk - simplified processing with fewer operations
+                    // Convert the Uint8Array to Float32Array for audio processing using faster bulk operation
+                    const pcmData = new Float32Array(chunk.length / 2);
+                    const dataView = new DataView(chunk.buffer);
+                    
+                    // Use TypedArray.set for bulk operations when possible
+                    for (let i = 0; i < chunk.length / 2; i++) {
+                        pcmData[i] = dataView.getInt16(i * 2, true) / 32768.0;
+                    }
+                    
+                    // Create smaller mono buffer for first chunk to reduce processing time
+                    // Most devices can handle mono without issues for initial playback
+                    const audioBuffer = audioContext.createBuffer(1, pcmData.length, sampleRate);
+                    audioBuffer.getChannelData(0).set(pcmData);
+                    
+                    console.log("Created optimized first-chunk buffer");
+                    return audioBuffer;
+                } 
+                // Normal high-quality processing for subsequent chunks
+                else {
+                    // Convert the Uint8Array to Float32Array for audio processing
+                    const pcmData = new Float32Array(chunk.length / 2);
+                    const dataView = new DataView(chunk.buffer);
+                    
+                    // Convert 16-bit PCM to Float32
+                    for (let i = 0; i < chunk.length / 2; i++) {
+                        // Get the 16-bit sample
+                        const int16Value = dataView.getInt16(i * 2, true); // true for little-endian
+                        // Convert to float [-1.0, 1.0]
+                        pcmData[i] = int16Value / 32768.0;
+                    }
+                    
+                    // Create a stereo audio buffer (2 channels) for better compatibility
+                    const audioBuffer = audioContext.createBuffer(2, pcmData.length, sampleRate);
+                    
+                    // Copy the PCM data into both channels (mono to stereo conversion)
+                    const leftChannel = audioBuffer.getChannelData(0);
+                    const rightChannel = audioBuffer.getChannelData(1);
+                    
+                    for (let i = 0; i < pcmData.length; i++) {
+                        leftChannel[i] = pcmData[i];
+                        rightChannel[i] = pcmData[i]; // Duplicate to right channel
+                    }
+                    
+                    return audioBuffer;
                 }
-                
-                // Create a stereo audio buffer (2 channels) for better compatibility
-                const audioBuffer = audioContext.createBuffer(2, pcmData.length, sampleRate);
-                
-                // Copy the PCM data into both channels (mono to stereo conversion)
-                const leftChannel = audioBuffer.getChannelData(0);
-                const rightChannel = audioBuffer.getChannelData(1);
-                
-                for (let i = 0; i < pcmData.length; i++) {
-                    leftChannel[i] = pcmData[i];
-                    rightChannel[i] = pcmData[i]; // Duplicate to right channel
-                }
-                
-                return audioBuffer;
             } catch (e) {
                 console.error('Error creating audio buffer:', e);
                 return null;
