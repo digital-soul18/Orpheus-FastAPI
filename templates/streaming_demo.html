@@ -205,8 +205,18 @@
     
     <div class="metrics">
         <div class="metric-card">
-            <div class="metric-label">Time to First Audio</div>
+            <div class="metric-label">Network Response Time</div>
             <div class="metric-value" id="ttfb">-</div>
+            <div class="metric-label">milliseconds</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Time to First Audio</div>
+            <div class="metric-value" id="ttfa">-</div>
+            <div class="metric-label">milliseconds</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Processing Delay</div>
+            <div class="metric-value" id="processing-delay">-</div>
             <div class="metric-label">milliseconds</div>
         </div>
         <div class="metric-card">
@@ -214,6 +224,9 @@
             <div class="metric-value" id="total-time">-</div>
             <div class="metric-label">seconds</div>
         </div>
+    </div>
+    
+    <div class="metrics">
         <div class="metric-card">
             <div class="metric-label">Characters Per Second</div>
             <div class="metric-value" id="chars-per-second">-</div>
@@ -223,6 +236,27 @@
             <div class="metric-label">Real-Time Factor (RTF)</div>
             <div class="metric-value" id="rtf">-</div>
             <div class="metric-label">x realtime</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Audio Buffer Count</div>
+            <div class="metric-value" id="buffer-count">-</div>
+            <div class="metric-label">buffers</div>
+        </div>
+    </div>
+    
+    <!-- Timeline visualization -->
+    <div class="timeline-container" style="margin-top: 20px; background: #f5f5f5; padding: 15px; border-radius: 4px;">
+        <h3 style="margin-top: 0;">Audio Processing Timeline</h3>
+        <div class="timeline" style="position: relative; height: 60px; background: #fff; border-radius: 4px; margin-top: 10px; overflow: hidden;">
+            <div id="timeline-request" style="position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background-color: #0066cc;"></div>
+            <div id="timeline-first-byte" style="position: absolute; top: 0; bottom: 0; background-color: rgba(0, 102, 204, 0.2);"></div>
+            <div id="timeline-first-audio" style="position: absolute; top: 0; bottom: 0; background-color: rgba(21, 87, 36, 0.2);"></div>
+            <div id="timeline-processing" style="position: absolute; top: 30px; height: 30px; background-color: rgba(133, 100, 4, 0.2);"></div>
+            <div id="timeline-legend" style="position: absolute; top: 5px; left: 10px; font-size: 12px; color: #333;">
+                <span style="display: inline-block; margin-right: 15px;"><span style="display: inline-block; width: 10px; height: 10px; background-color: rgba(0, 102, 204, 0.2); margin-right: 5px;"></span> Network</span>
+                <span style="display: inline-block; margin-right: 15px;"><span style="display: inline-block; width: 10px; height: 10px; background-color: rgba(133, 100, 4, 0.2); margin-right: 5px;"></span> Processing</span>
+                <span style="display: inline-block;"><span style="display: inline-block; width: 10px; height: 10px; background-color: rgba(21, 87, 36, 0.2); margin-right: 5px;"></span> Playback</span>
+            </div>
         </div>
     </div>
     
@@ -235,11 +269,16 @@
         let audioSource;
         let startTime;
         let ttfbTime;
+        let audioStartTime;
         let totalTime;
+        let bufferCount = 0;
         let textLength;
         let isStreaming = true;
         let isPlaying = false;
         let firstChunkMode = true; // Special handling for first chunk
+        
+        // For timeline visualization
+        let maxTimelineWidth = 0;
         
         function updateStatus(message, type) {
             const statusElement = document.getElementById('status');
@@ -298,9 +337,24 @@
             
             // Reset metrics
             document.getElementById('ttfb').textContent = '-';
+            document.getElementById('ttfa').textContent = '-';
+            document.getElementById('processing-delay').textContent = '-';
             document.getElementById('total-time').textContent = '-';
             document.getElementById('chars-per-second').textContent = '-';
             document.getElementById('rtf').textContent = '-';
+            document.getElementById('buffer-count').textContent = '-';
+            
+            // Reset timeline visualization
+            document.getElementById('timeline-request').style.left = '0px';
+            document.getElementById('timeline-first-byte').style.left = '0px';
+            document.getElementById('timeline-first-byte').style.width = '0px';
+            document.getElementById('timeline-first-audio').style.left = '0px';
+            document.getElementById('timeline-first-audio').style.width = '0px';
+            document.getElementById('timeline-processing').style.left = '0px';
+            document.getElementById('timeline-processing').style.width = '0px';
+            
+            // Reset buffer count
+            bufferCount = 0;
             
             startTime = performance.now();
             ttfbTime = null;
@@ -421,9 +475,16 @@
                 // Record time to first byte if this is the first chunk
                 if (!processedFirstChunk) {
                     ttfbTime = performance.now();
-                    document.getElementById('ttfb').textContent = Math.round(ttfbTime - startTime);
+                    const ttfbValue = Math.round(ttfbTime - startTime);
+                    document.getElementById('ttfb').textContent = ttfbValue;
                     processedFirstChunk = true;
                     updateStatus('Receiving audio stream...', 'loading');
+                    
+                    // Update timeline visualization - first byte received
+                    maxTimelineWidth = document.querySelector('.timeline').offsetWidth - 20; // Leave margin
+                    const timelineFirstByte = document.getElementById('timeline-first-byte');
+                    timelineFirstByte.style.left = '0px';
+                    timelineFirstByte.style.width = (maxTimelineWidth * 0.2) + 'px'; // Initial scale
                 }
                 
                 chunks.push(value);
@@ -455,6 +516,7 @@
                                     if (audioBuffer) {
                                         audioBuffers.push(audioBuffer);
                                         totalAudioDuration += audioBuffer.duration;
+                                        bufferCount++;
                                     }
                                 }
                             }
@@ -465,6 +527,7 @@
                         if (audioBuffer) {
                             audioBuffers.push(audioBuffer);
                             totalAudioDuration += audioBuffer.duration;
+                            bufferCount++;
                             
                             // Schedule playback if we're already playing
                             if (audioStarted) {
@@ -486,10 +549,39 @@
                         if (firstChunkMode && audioBuffers.length > 0) {
                             // Start playback immediately with first chunk
                             audioStarted = true;
+                            audioStartTime = performance.now();
+                            
+                            // Calculate processing delay
+                            const processingDelay = Math.round(audioStartTime - ttfbTime);
+                            const ttfaValue = Math.round(audioStartTime - startTime);
+                            
+                            // Update metrics
+                            document.getElementById('ttfa').textContent = ttfaValue;
+                            document.getElementById('processing-delay').textContent = processingDelay;
+                            document.getElementById('buffer-count').textContent = bufferCount;
+                            
+                            // Update timeline visualization
+                            const timelineFirstAudio = document.getElementById('timeline-first-audio');
+                            const timelineProcessing = document.getElementById('timeline-processing');
+                            
+                            // Calculate positions based on times
+                            const requestToFirstByte = ttfbTime - startTime;
+                            const firstByteToAudio = audioStartTime - ttfbTime;
+                            
+                            // Scale to fit timeline width with 20% for network, 80% for rest
+                            const networkWidth = maxTimelineWidth * 0.2;
+                            const processingWidth = (maxTimelineWidth - networkWidth) * (firstByteToAudio / (firstByteToAudio + 1000)); // Add padding
+                            
+                            timelineProcessing.style.left = networkWidth + 'px';
+                            timelineProcessing.style.width = processingWidth + 'px';
+                            
+                            timelineFirstAudio.style.left = (networkWidth + processingWidth) + 'px';
+                            timelineFirstAudio.style.width = (maxTimelineWidth - networkWidth - processingWidth) + 'px';
+                            
                             updateStatus('Playing audio stream...', 'playing');
                             playAudioBuffers();
                             firstChunkMode = false; // Exit first chunk mode
-                            console.log("Started playback immediately with first chunk");
+                            console.log(`Started playback: TTFB=${document.getElementById('ttfb').textContent}ms, TTFA=${ttfaValue}ms, Processing=${processingDelay}ms`);
                         } 
                         // Normal buffering strategy for subsequent chunks
                         else {
@@ -501,8 +593,34 @@
                             if (audioBuffers.length >= bufferAheadSize || elapsedMs > startTime + 100) {
                                 if (audioBuffers.length > 0) {
                                     audioStarted = true;
+                                    audioStartTime = performance.now();
+                                    
+                                    // Calculate processing delay
+                                    const processingDelay = Math.round(audioStartTime - ttfbTime);
+                                    const ttfaValue = Math.round(audioStartTime - startTime);
+                                    
+                                    // Update metrics
+                                    document.getElementById('ttfa').textContent = ttfaValue;
+                                    document.getElementById('processing-delay').textContent = processingDelay;
+                                    document.getElementById('buffer-count').textContent = bufferCount;
+                                    
+                                    // Update timeline visualization
+                                    const timelineFirstAudio = document.getElementById('timeline-first-audio');
+                                    const timelineProcessing = document.getElementById('timeline-processing');
+                                    
+                                    // Scale to fit timeline
+                                    const networkWidth = maxTimelineWidth * 0.2;
+                                    const processingWidth = (maxTimelineWidth - networkWidth) * (processingDelay / (processingDelay + 1000)); // Add padding
+                                    
+                                    timelineProcessing.style.left = networkWidth + 'px';
+                                    timelineProcessing.style.width = processingWidth + 'px';
+                                    
+                                    timelineFirstAudio.style.left = (networkWidth + processingWidth) + 'px';
+                                    timelineFirstAudio.style.width = (maxTimelineWidth - networkWidth - processingWidth) + 'px';
+                                    
                                     updateStatus('Playing audio stream...', 'playing');
                                     playAudioBuffers();
+                                    console.log(`Started playback: TTFB=${document.getElementById('ttfb').textContent}ms, TTFA=${ttfaValue}ms, Processing=${processingDelay}ms`);
                                 }
                             } else {
                                 // Still buffering
