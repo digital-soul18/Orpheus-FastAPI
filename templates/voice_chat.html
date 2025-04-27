@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orpheus Voice Chat</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 500px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 18px;
+            max-width: 80%;
+            position: relative;
+        }
+        .user-message {
+            background-color: #e1f5fe;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+        .assistant-message {
+            background-color: #f1f0f0;
+            align-self: flex-start;
+        }
+        .typing-indicator {
+            padding: 10px 15px;
+            background-color: #f1f0f0;
+            border-radius: 18px;
+            display: none;
+            align-self: flex-start;
+            margin-bottom: 15px;
+            width: 60px;
+        }
+        .typing-indicator span {
+            height: 8px;
+            width: 8px;
+            background-color: #666;
+            display: inline-block;
+            border-radius: 50%;
+            animation: typing 1s infinite ease-in-out;
+            margin-right: 5px;
+        }
+        .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.3s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.6s; }
+        
+        @keyframes typing {
+            0% { transform: translateY(0); }
+            50% { transform: translateY(-5px); }
+            100% { transform: translateY(0); }
+        }
+        
+        .chat-input {
+            display: flex;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-top: 1px solid #eee;
+        }
+        .chat-input textarea {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            resize: none;
+            height: 50px;
+            max-height: 150px;
+        }
+        .chat-input button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 0 20px;
+            margin-left: 10px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .chat-input button:hover {
+            background-color: #45a049;
+        }
+        .chat-input button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .metrics {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .metric-card {
+            flex: 1;
+            min-width: 120px;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 20px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+        .metric-label {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .voice-selector {
+            display: flex;
+            align-items: center;
+        }
+        
+        .voice-selector select {
+            margin-left: 10px;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        
+        #stop-btn {
+            background-color: #f44336;
+        }
+        
+        #stop-btn:hover {
+            background-color: #d32f2f;
+        }
+        
+        /* Timeline visualization */
+        .timeline-container {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+        .timeline {
+            position: relative;
+            height: 60px;
+            background: #fff;
+            border-radius: 4px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        .timeline-legend {
+            position: absolute;
+            top: 5px;
+            left: 10px;
+            font-size: 12px;
+            color: #333;
+        }
+        .timeline-legend span {
+            display: inline-block;
+            margin-right: 15px;
+        }
+        .timeline-legend span::before {
+            content: '';
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 5px;
+            border-radius: 2px;
+        }
+        .llm-time::before {
+            background-color: rgba(0, 102, 204, 0.5);
+        }
+        .tts-time::before {
+            background-color: rgba(76, 175, 80, 0.5);
+        }
+        .total-time::before {
+            background-color: rgba(244, 67, 54, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <h1>Orpheus Voice Chat with GPT-4o-mini</h1>
+    
+    <div class="controls">
+        <div class="voice-selector">
+            <label for="voice-select">Assistant Voice:</label>
+            <select id="voice-select">
+                <option value="tara">Tara (Female)</option>
+                <option value="zac">Zac (Male)</option>
+                <option value="leah">Leah (Female, Warm)</option>
+                <option value="dan">Dan (Male, Casual)</option>
+                <option value="mia">Mia (Female, Professional)</option>
+                <option value="leo">Leo (Male, Deep)</option>
+            </select>
+        </div>
+        <button id="stop-btn" onclick="stopPlayback()" disabled>Stop Audio</button>
+    </div>
+    
+    <div class="chat-container">
+        <div class="chat-messages" id="chat-messages">
+            <div class="message assistant-message">
+                Hello! I'm your AI assistant with voice. How can I help you today?
+            </div>
+        </div>
+        <div class="typing-indicator" id="typing-indicator">
+            <span></span><span></span><span></span>
+        </div>
+        <div class="chat-input">
+            <textarea id="message-input" placeholder="Type your message here..." onkeydown="if(event.keyCode === 13 && !event.shiftKey) { event.preventDefault(); sendMessage(); }"></textarea>
+            <button onclick="sendMessage()" id="send-btn">Send</button>
+        </div>
+    </div>
+    
+    <div class="metrics">
+        <div class="metric-card">
+            <div class="metric-label">LLM Response Time</div>
+            <div class="metric-value" id="llm-ttfb">-</div>
+            <div class="metric-label">milliseconds</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">TTS Response Time</div>
+            <div class="metric-value" id="tts-ttfb">-</div>
+            <div class="metric-label">milliseconds</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Time to First Audio</div>
+            <div class="metric-value" id="ttfa">-</div>
+            <div class="metric-label">milliseconds</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Total Response Time</div>
+            <div class="metric-value" id="total-time">-</div>
+            <div class="metric-label">seconds</div>
+        </div>
+    </div>
+    
+    <div class="timeline-container">
+        <h3 style="margin-top: 0;">Response Timeline</h3>
+        <div class="timeline" id="response-timeline">
+            <div class="timeline-legend">
+                <span class="llm-time">LLM Processing</span>
+                <span class="tts-time">TTS Generation</span>
+                <span class="total-time">Total Time</span>
+            </div>
+            <div id="timeline-llm" style="position: absolute; top: 30px; height: 15px; background-color: rgba(0, 102, 204, 0.5); width: 0;"></div>
+            <div id="timeline-tts" style="position: absolute; top: 30px; height: 15px; left: 0; background-color: rgba(76, 175, 80, 0.5); width: 0;"></div>
+            <div id="timeline-total" style="position: absolute; top: 45px; height: 15px; background-color: rgba(244, 67, 54, 0.3); width: 0;"></div>
+        </div>
+    </div>
+    
+    <script>
+        // Pre-initialize audioContext on page load
+        let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioContext.suspend(); // Keep suspended until needed
+        
+        // Audio streaming state
+        let audioBuffers = [];
+        let scheduledSourceNodes = [];
+        let nextPlayTime = 0;
+        let isPlaying = false;
+        
+        // Timing metrics
+        let chatStartTime = 0;
+        let llmResponseTime = 0;
+        let ttsResponseTime = 0;
+        let audioStartTime = 0;
+        let totalTime = 0;
+        
+        // OpenAI API settings
+        const OPENAI_MODEL = "gpt-4o-mini";
+        
+        // Chat history for context
+        let chatHistory = [
+            { role: "system", content: "You are a helpful, friendly AI assistant. Keep your responses relatively concise and conversational." },
+            { role: "assistant", content: "Hello! I'm your AI assistant with voice. How can I help you today?" }
+        ];
+        
+        async function sendMessage() {
+            const messageInput = document.getElementById('message-input');
+            const message = messageInput.value.trim();
+            
+            if (!message) return;
+            
+            // Reset audio state if playing
+            stopPlayback();
+            
+            // Clear the input
+            messageInput.value = '';
+            
+            // Display user message
+            appendMessage(message, 'user');
+            
+            // Show typing indicator
+            document.getElementById('typing-indicator').style.display = 'block';
+            
+            // Disable send button during processing
+            document.getElementById('send-btn').disabled = true;
+            document.getElementById('stop-btn').disabled = false;
+            
+            // Reset metrics display
+            document.getElementById('llm-ttfb').textContent = '-';
+            document.getElementById('tts-ttfb').textContent = '-';
+            document.getElementById('ttfa').textContent = '-';
+            document.getElementById('total-time').textContent = '-';
+            
+            // Reset timeline visualization
+            document.getElementById('timeline-llm').style.width = '0';
+            document.getElementById('timeline-tts').style.width = '0';
+            document.getElementById('timeline-total').style.width = '0';
+            
+            // Record start time for metrics
+            chatStartTime = performance.now();
+            
+            // Add message to history
+            chatHistory.push({ role: "user", content: message });
+            
+            try {
+                // Resume audio context before API calls
+                if (audioContext.state === "suspended") {
+                    await audioContext.resume();
+                    console.log("AudioContext resumed");
+                }
+                
+                // Stream from OpenAI and TTS in real-time
+                await streamGptAndTts();
+                
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('typing-indicator').style.display = 'none';
+                appendMessage('Sorry, there was an error processing your request. Please try again.', 'assistant');
+                document.getElementById('send-btn').disabled = false;
+            }
+        }
+        
+        async function streamGptAndTts() {
+            // Get selected voice
+            const voice = document.getElementById('voice-select').value;
+            
+            // Prepare for streaming
+            audioBuffers = [];
+            scheduledSourceNodes = [];
+            nextPlayTime = 0;
+            
+            // Reset the time of the last TTS chunk to ensure we quickly start TTS on the first chunk
+            lastTtsChunkTime = 0;
+            
+            // Accumulated response for chat history
+            let fullResponse = '';
+            
+            // Start OpenAI streaming request
+            const openaiStartTime = performance.now();
+            
+            try {
+                // Call our backend endpoint that will handle the OpenAI streaming
+                const response = await fetch('/api/chat/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        messages: chatHistory,
+                        model: OPENAI_MODEL,
+                        stream: true
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                // Get reader for the stream
+                const reader = response.body.getReader();
+                let currentSentence = '';
+                let isFirstChunk = true;
+                let lastTtsChunkTime = 0;
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    // Convert bytes to text
+                    const text = new TextDecoder().decode(value);
+                    
+                    // If this is the first chunk from LLM, record time
+                    if (isFirstChunk) {
+                        llmResponseTime = performance.now() - openaiStartTime;
+                        document.getElementById('llm-ttfb').textContent = Math.round(llmResponseTime);
+                        
+                        // Update timeline for LLM
+                        const timelineWidth = document.getElementById('response-timeline').offsetWidth;
+                        document.getElementById('timeline-llm').style.width = `${timelineWidth * 0.3}px`;
+                        
+                        isFirstChunk = false;
+                    }
+                    
+                    // Append to the message
+                    appendStreamingContent(text);
+                    fullResponse += text;
+                    
+                    // Accumulate text into sentences
+                    currentSentence += text;
+                    
+                    // Check for any punctuation marks to split on (more aggressive chunking)
+                    const punctuationBreak = /[,.!?:;]\s*/.test(currentSentence.slice(-2)) || 
+                                           /[,.!?:;]$/.test(currentSentence) ||
+                                           /\n/.test(currentSentence);
+                    
+                    // Also send smaller chunks (50 chars instead of 100)
+                    const lengthBreakPoint = currentSentence.length > 50;
+                    
+                    const timeSinceLastTts = performance.now() - lastTtsChunkTime;
+                    // Lower the time threshold to 250ms for more aggressive sending
+                    const shouldSendToTts = punctuationBreak || lengthBreakPoint || timeSinceLastTts > 250;
+                    
+                    if (shouldSendToTts && currentSentence.trim().length > 0) {
+                        // Send this chunk to TTS
+                        console.log(`Sending TTS chunk: "${currentSentence}"`);
+                        
+                        // Record time before TTS request
+                        const ttsStartTime = performance.now();
+                        
+                        // Send to TTS streaming endpoint and handle audio
+                        await sendToTtsStream(currentSentence, voice, ttsStartTime);
+                        
+                        // Reset current sentence
+                        currentSentence = '';
+                        lastTtsChunkTime = performance.now();
+                    }
+                }
+                
+                // Process any remaining text
+                if (currentSentence.trim().length > 0) {
+                    console.log(`Sending final TTS chunk: "${currentSentence}"`);
+                    await sendToTtsStream(currentSentence, voice, performance.now());
+                }
+                
+                // Add the full response to chat history
+                chatHistory.push({ role: "assistant", content: fullResponse });
+                
+                // Record total time
+                totalTime = (performance.now() - chatStartTime) / 1000; // in seconds
+                document.getElementById('total-time').textContent = totalTime.toFixed(2);
+                
+                // Update total timeline
+                const timelineWidth = document.getElementById('response-timeline').offsetWidth;
+                document.getElementById('timeline-total').style.width = `${timelineWidth}px`;
+                
+                // Hide typing indicator and re-enable send button
+                document.getElementById('typing-indicator').style.display = 'none';
+                document.getElementById('send-btn').disabled = false;
+                
+            } catch (error) {
+                console.error('Error in streaming:', error);
+                document.getElementById('typing-indicator').style.display = 'none';
+                document.getElementById('send-btn').disabled = false;
+            }
+        }
+        
+        async function sendToTtsStream(text, voice, ttsRequestStartTime) {
+            try {
+                // Send to our TTS streaming endpoint - use full path
+                console.log("Sending TTS request to streaming endpoint");
+                const response = await fetch('/v1/audio/speech/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        input: text,
+                        model: "orpheus",
+                        voice: voice,
+                        response_format: "wav",
+                        speed: 1
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`TTS HTTP error! status: ${response.status}`);
+                }
+                
+                // Process the stream
+                const reader = response.body.getReader();
+                let headerBuffer = new Uint8Array(44); // WAV header is 44 bytes
+                let headerBufferPos = 0;
+                let isHeaderReceived = false;
+                let isFirstTtsChunk = true;
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    // If this is first chunk from TTS, record time
+                    if (isFirstTtsChunk) {
+                        ttsResponseTime = performance.now() - ttsRequestStartTime;
+                        document.getElementById('tts-ttfb').textContent = Math.round(ttsResponseTime);
+                        
+                        // Update timeline for TTS
+                        const timelineWidth = document.getElementById('response-timeline').offsetWidth;
+                        // Position TTS after LLM
+                        const llmWidth = parseInt(document.getElementById('timeline-llm').style.width);
+                        document.getElementById('timeline-tts').style.left = `${llmWidth}px`;
+                        document.getElementById('timeline-tts').style.width = `${timelineWidth * 0.5}px`;
+                        
+                        isFirstTtsChunk = false;
+                    }
+                    
+                    // Handle WAV header parsing
+                    if (!isHeaderReceived) {
+                        // Fill header buffer
+                        if (headerBufferPos < 44) {
+                            const bytesToCopy = Math.min(44 - headerBufferPos, value.length);
+                            headerBuffer.set(value.slice(0, bytesToCopy), headerBufferPos);
+                            headerBufferPos += bytesToCopy;
+                            
+                            // If header is complete
+                            if (headerBufferPos === 44) {
+                                isHeaderReceived = true;
+                                
+                                // Extract sample rate
+                                const sampleRate = new DataView(headerBuffer.buffer).getUint32(24, true);
+                                
+                                // Process audio data after header if any
+                                if (value.length > bytesToCopy) {
+                                    const audioData = value.slice(bytesToCopy);
+                                    const audioBuffer = await createAudioBuffer(audioData, sampleRate);
+                                    
+                                    if (audioBuffer) {
+                                        audioBuffers.push(audioBuffer);
+                                        
+                                        // Start playing immediately with first chunk of audio data
+                                        if (!isPlaying) {
+                                            isPlaying = true;
+                                            audioStartTime = performance.now();
+                                            document.getElementById('ttfa').textContent = Math.round(audioStartTime - chatStartTime);
+                                            console.log(`Time to first audio: ${Math.round(audioStartTime - chatStartTime)}ms`);
+                                            
+                                            // Play immediately without waiting for more buffers
+                                            playAudioBuffers();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Process regular audio chunks
+                        const audioBuffer = await createAudioBuffer(value, 24000); // Standard sample rate
+                        
+                        if (audioBuffer) {
+                            audioBuffers.push(audioBuffer);
+                            
+                            // Make sure playback has started
+                            if (!isPlaying) {
+                                isPlaying = true;
+                                audioStartTime = performance.now();
+                                document.getElementById('ttfa').textContent = Math.round(audioStartTime - chatStartTime);
+                                playAudioBuffers();
+                            } else {
+                                // If already playing, schedule this buffer
+                                playAudioBuffers();
+                            }
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error in TTS streaming:', error);
+            }
+        }
+        
+        // Create audio buffer from PCM data - optimized for low latency
+        async function createAudioBuffer(chunk, sampleRate = 24000) {
+            if (!chunk || chunk.length === 0) return null;
+            
+            try {
+                // For first audio chunks, use faster mono processing to reduce latency
+                if (!isPlaying) {
+                    // Fast-path for first audio chunk - use mono for speed
+                    const pcmData = new Float32Array(chunk.length / 2);
+                    const dataView = new DataView(chunk.buffer);
+                    
+                    for (let i = 0; i < chunk.length / 2; i++) {
+                        pcmData[i] = dataView.getInt16(i * 2, true) / 32768.0;
+                    }
+                    
+                    // Use mono for first chunk
+                    const audioBuffer = audioContext.createBuffer(1, pcmData.length, sampleRate);
+                    audioBuffer.getChannelData(0).set(pcmData);
+                    
+                    return audioBuffer;
+                } else {
+                    // Normal path for subsequent chunks - stereo
+                    // Convert PCM to Float32
+                    const pcmData = new Float32Array(chunk.length / 2);
+                    const dataView = new DataView(chunk.buffer);
+                    
+                    for (let i = 0; i < chunk.length / 2; i++) {
+                        pcmData[i] = dataView.getInt16(i * 2, true) / 32768.0;
+                    }
+                    
+                    // Create stereo buffer for compatibility
+                    const audioBuffer = audioContext.createBuffer(2, pcmData.length, sampleRate);
+                    
+                    // Copy to both channels
+                    const leftChannel = audioBuffer.getChannelData(0);
+                    const rightChannel = audioBuffer.getChannelData(1);
+                    
+                    for (let i = 0; i < pcmData.length; i++) {
+                        leftChannel[i] = pcmData[i];
+                        rightChannel[i] = pcmData[i];
+                    }
+                    
+                    return audioBuffer;
+                }
+            } catch (e) {
+                console.error('Error creating audio buffer:', e);
+                return null;
+            }
+        }
+        
+        // Schedule and play audio buffers
+        function playAudioBuffers() {
+            if (audioBuffers.length === 0) return;
+            
+            // Initialize play time if first buffer
+            if (nextPlayTime === 0) {
+                nextPlayTime = audioContext.currentTime;
+            }
+            
+            // Schedule all available buffers
+            while (audioBuffers.length > 0) {
+                const buffer = audioBuffers.shift();
+                
+                // Create source for this buffer
+                const source = audioContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioContext.destination);
+                
+                // Schedule at the correct time
+                source.start(nextPlayTime);
+                nextPlayTime += buffer.duration;
+                
+                // Track scheduled nodes
+                scheduledSourceNodes.push(source);
+                
+                // Cleanup when done
+                source.onended = () => {
+                    const index = scheduledSourceNodes.indexOf(source);
+                    if (index !== -1) {
+                        scheduledSourceNodes.splice(index, 1);
+                    }
+                    
+                    // Reset if all done
+                    if (scheduledSourceNodes.length === 0 && audioBuffers.length === 0) {
+                        isPlaying = false;
+                        nextPlayTime = 0;
+                        document.getElementById('stop-btn').disabled = true;
+                    }
+                };
+            }
+        }
+        
+        // Stop all audio playback
+        function stopPlayback() {
+            scheduledSourceNodes.forEach(source => {
+                try { source.stop(); } catch (e) { /* Ignore */ }
+            });
+            
+            scheduledSourceNodes = [];
+            audioBuffers = [];
+            isPlaying = false;
+            nextPlayTime = 0;
+            document.getElementById('stop-btn').disabled = true;
+        }
+        
+        // Add a message to the chat
+        function appendMessage(message, role) {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}-message`;
+            messageDiv.textContent = message;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        // Add streaming content to the last message
+        function appendStreamingContent(text) {
+            const chatMessages = document.getElementById('chat-messages');
+            
+            // Check if there's already an assistant message being built
+            let lastMessage = chatMessages.lastElementChild;
+            
+            if (!lastMessage || !lastMessage.classList.contains('assistant-message') || 
+                lastMessage.hasAttribute('data-complete')) {
+                // Create a new message
+                lastMessage = document.createElement('div');
+                lastMessage.className = 'message assistant-message';
+                lastMessage.textContent = text;
+                chatMessages.appendChild(lastMessage);
+            } else {
+                // Append to existing message
+                lastMessage.textContent += text;
+            }
+            
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+    </script>
+</body>
+</html>

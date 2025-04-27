@@ -13,6 +13,7 @@ import io
 import struct
 import json
 import numpy as np
+import httpx
 
 # Function to ensure .env file exists
 def ensure_env_file_exists():
@@ -98,6 +99,20 @@ class SpeechRequest(BaseModel):
 class StreamingSpeechRequest(BaseModel):
     input: str
     model: str = "orpheus"
+    voice: str = DEFAULT_VOICE
+    response_format: str = "wav"
+    speed: float = 1.0
+    
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    
+class ChatStreamRequest(BaseModel):
+    messages: List[ChatMessage]
+    model: str = "gpt-4o-mini"
+    stream: bool = True
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
     voice: str = DEFAULT_VOICE
     response_format: str = "wav"
     speed: float = 1.0
@@ -396,6 +411,84 @@ async def root(request: Request):
             "VOICE_TO_LANGUAGE": VOICE_TO_LANGUAGE,
             "AVAILABLE_LANGUAGES": AVAILABLE_LANGUAGES
         }
+    )
+
+@app.get("/chat", response_class=HTMLResponse)
+async def voice_chat(request: Request):
+    """Voice chat interface with streaming LLM and TTS"""
+    return templates.TemplateResponse(
+        "voice_chat.html",
+        {"request": request}
+    )
+    
+@app.post("/api/chat/stream")
+async def stream_chat(request: ChatStreamRequest):
+    """Stream OpenAI API responses"""
+    # Get OpenAI API key from environment
+    openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+        
+    async def stream_openai_response():
+        """Generate streaming responses from OpenAI"""
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            try:
+                # Create streaming request to OpenAI
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openai_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": request.model,
+                        "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages],
+                        "stream": True,
+                        **({"max_tokens": request.max_tokens} if request.max_tokens else {}),
+                        **({"temperature": request.temperature} if request.temperature else {})
+                    },
+                    timeout=120.0
+                )
+                
+                # Stream the SSE responses
+                if response.status_code != 200:
+                    error_detail = await response.aread()
+                    raise HTTPException(status_code=response.status_code, 
+                                        detail=f"OpenAI API error: {error_detail.decode()}")
+                
+                async for line in response.aiter_lines():
+                    # Skip empty lines or "[DONE]"
+                    if not line or line == "[DONE]" or not line.startswith("data:"):
+                        continue
+                    
+                    # Extract the data part
+                    if line.startswith("data:"):
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        
+                        try:
+                            # Parse JSON data
+                            json_data = json.loads(data)
+                            
+                            # Extract text chunk
+                            chunk = json_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            if chunk:
+                                yield chunk.encode("utf-8")
+                        except json.JSONDecodeError:
+                            print(f"Error decoding JSON: {data}")
+                            continue
+            except Exception as e:
+                print(f"Error in OpenAI streaming: {e}")
+                import traceback
+                traceback.print_exc()
+                # Send error message to client
+                yield f"Error: {str(e)}".encode("utf-8")
+    
+    return StreamingResponse(
+        stream_openai_response(),
+        media_type="text/plain",
+        headers={"Content-Type": "text/plain; charset=utf-8"}
     )
 
 @app.get("/web/", response_class=HTMLResponse)

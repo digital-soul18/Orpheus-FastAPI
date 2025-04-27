@@ -25,6 +25,7 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 # Install other dependencies
 echo "Installing project dependencies..."
 pip3 install -r requirements.txt
+pip3 install httpx
 
 # Download Orpheus model if not present
 MODEL_NAME=${ORPHEUS_MODEL_NAME:-Orpheus-3b-FT-Q8_0.gguf}
@@ -49,26 +50,78 @@ ORPHEUS_SAMPLE_RATE=24000
 ORPHEUS_MODEL_NAME=$MODEL_NAME
 ORPHEUS_PORT=5005
 ORPHEUS_HOST=0.0.0.0
+
+# OpenAI API Configuration - Replace with your API key
+OPENAI_API_KEY=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
 EOF
 
 echo "Environment configured."
 
 # Start llama.cpp server in background
 echo "Starting llama.cpp server..."
-# Check if llama.cpp is installed
-if [ ! -f "llama.cpp/llama-server" ]; then
+
+# Check if llama.cpp directory exists first
+if [ -d "llama.cpp" ]; then
+  echo "llama.cpp directory exists, checking for binary..."
+  
+  # Check if the llama-server binary exists in any of the potential locations
+  if [ -f "llama.cpp/llama-server" ]; then
+    echo "Using existing llama-server from llama.cpp directory"
+    LLAMA_SERVER="llama.cpp/llama-server"
+  elif [ -f "llama.cpp/build/bin/llama-server" ]; then
+    echo "Using existing llama-server from llama.cpp/build/bin directory"
+    LLAMA_SERVER="llama.cpp/build/bin/llama-server"
+  elif [ -f "llama.cpp/server" ]; then
+    echo "Using existing llama-server from older llama.cpp build"
+    LLAMA_SERVER="llama.cpp/server"
+  else
+    echo "llama.cpp directory exists but no server binary found, recompiling..."
+    cd llama.cpp
+    mkdir -p build
+    cd build
+    cmake .. -DGGML_CUDA=ON
+    cmake --build . --config Release
+    cd ../..
+    
+    # Check if build succeeded
+    if [ -f "llama.cpp/build/bin/llama-server" ]; then
+      LLAMA_SERVER="llama.cpp/build/bin/llama-server"
+    else
+      echo "Failed to find llama-server after build, checking alternative locations..."
+      LLAMA_SERVER=$(find llama.cpp -name "llama-server" -type f | head -1)
+      if [ -z "$LLAMA_SERVER" ]; then
+        echo "ERROR: Could not find llama-server binary. Please install manually."
+        exit 1
+      fi
+    fi
+  fi
+else
+  # Fresh install of llama.cpp
   echo "llama.cpp not found, downloading and compiling..."
   git clone https://github.com/ggerganov/llama.cpp.git
   cd llama.cpp
-  mkdir build
+  mkdir -p build
   cd build
   cmake .. -DGGML_CUDA=ON
   cmake --build . --config Release
   cd ../..
+  
+  # Check if build succeeded
+  if [ -f "llama.cpp/build/bin/llama-server" ]; then
+    LLAMA_SERVER="llama.cpp/build/bin/llama-server"
+  else
+    echo "Failed to find llama-server after build, checking alternative locations..."
+    LLAMA_SERVER=$(find llama.cpp -name "llama-server" -type f | head -1)
+    if [ -z "$LLAMA_SERVER" ]; then
+      echo "ERROR: Could not find llama-server binary. Please install manually."
+      exit 1
+    fi
+  fi
 fi
 
-# Launch llama.cpp server
-nohup llama.cpp/build/bin/llama-server -m models/$MODEL_NAME \
+# Launch llama.cpp server using detected binary
+echo "Starting llama.cpp server with: $LLAMA_SERVER"
+nohup $LLAMA_SERVER -m models/$MODEL_NAME \
   --port 5006 \
   --host 0.0.0.0 \
   --n-gpu-layers 29 \
