@@ -52,7 +52,7 @@ ORPHEUS_PORT=5005
 ORPHEUS_HOST=0.0.0.0
 
 # OpenAI API Configuration - Replace with your API key
-OPENAI_API_KEY=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
+# OPENAI_API_KEY=your-openai-api-key-here
 EOF
 
 echo "Environment configured."
