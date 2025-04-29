@@ -1,13 +1,52 @@
 #!/bin/bash
 # Orpheus-FastAPI Setup Script for RunPod (No Docker)
+#
+# To enable Canary speech recognition model:
+# CANARY_MODEL_ENABLED=true ./runpod_setup.sh
+#
 set -e
+
+# Check if --install-canary was passed
+INSTALL_CANARY=false
+for arg in "$@"; do
+  if [[ "$arg" == "--install-canary" ]]; then
+    INSTALL_CANARY=true
+    export CANARY_MODEL_ENABLED=true
+    echo "⚠️ Installing Canary STT model (--install-canary flag detected)"
+  fi
+done
+
+# Check for direct install command
+if [[ "$1" == "install-canary" ]]; then
+  echo "⚠️ Running NeMo installation for Canary STT..."
+  # Install Python dependencies for NeMo
+  pip3 install --no-cache-dir text-unidecode omegaconf
+  
+  # Install NeMo with ASR support
+  NEMO_BRANCH='r2.3.0'
+  pip3 install --no-cache-dir git+https://github.com/NVIDIA/NeMo.git@${NEMO_BRANCH}#egg=nemo_toolkit[asr]
+  
+  # Set CANARY_MODEL_ENABLED=true in .env
+  if [ -f ".env" ]; then
+    sed -i 's/CANARY_MODEL_ENABLED=.*/CANARY_MODEL_ENABLED=true/g' .env
+    if ! grep -q "CANARY_MODEL_ENABLED" .env; then
+      echo "# Canary STT Model Configuration" >> .env
+      echo "CANARY_MODEL_ENABLED=true" >> .env
+    fi
+  fi
+  
+  echo "✅ NeMo installed successfully"
+  echo "✅ Canary STT model will be downloaded on next server start"
+  echo "✅ CANARY_MODEL_ENABLED=true set in .env"
+  exit 0
+fi
 
 echo "Setting up Orpheus-FastAPI on RunPod..."
 
 # Install dependencies
 echo "Installing system dependencies..."
 apt-get update
-apt-get install -y python3.10 python3-pip python3-venv libsndfile1 ffmpeg portaudio19-dev wget git cmake build-essential libcurl4-openssl-dev
+apt-get install -y python3.10 python3-pip python3-venv libsndfile1 ffmpeg portaudio19-dev wget git cmake build-essential libcurl4-openssl-dev sox
 
 # Create directories
 echo "Creating directories..."
@@ -25,7 +64,35 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 # Install other dependencies
 echo "Installing project dependencies..."
 pip3 install -r requirements.txt
-pip3 install httpx
+pip3 install httpx omegaconf
+
+# Check if we should install NeMo for Canary model
+if [ -f ".env" ]; then
+  # Source the environment variables from .env
+  CANARY_ENABLED_VALUE=$(grep -E "^CANARY_MODEL_ENABLED\s*=\s*(true|false)" .env | sed -E 's/^CANARY_MODEL_ENABLED\s*=\s*//')
+  echo "CANARY_MODEL_ENABLED from .env: ${CANARY_ENABLED_VALUE}"
+  if [ "${CANARY_ENABLED_VALUE}" = "true" ]; then
+    export CANARY_MODEL_ENABLED=true
+  fi
+fi
+
+echo "Final CANARY_MODEL_ENABLED: ${CANARY_MODEL_ENABLED}"
+
+# Force installation if explicitly running with CANARY_MODEL_ENABLED=true
+if [[ "${CANARY_MODEL_ENABLED}" == "true" || "${INSTALL_CANARY}" == "true" ]]; then
+  echo "Installing NVIDIA NeMo for Canary STT model..."
+  # Install Python dependencies for NeMo
+  pip3 install --no-cache-dir text-unidecode omegaconf
+  
+  # Install NeMo with ASR support
+  NEMO_BRANCH='r2.3.0'
+  pip3 install --no-cache-dir git+https://github.com/NVIDIA/NeMo.git@${NEMO_BRANCH}#egg=nemo_toolkit[asr]
+  echo "NeMo installation completed"
+  
+  echo "NeMo installation status: $?"
+  echo "Verifying NeMo installation..."
+  pip3 list | grep -E 'nemo|omegaconf|text-unidecode'
+fi
 
 # Download Orpheus model if not present
 MODEL_NAME=${ORPHEUS_MODEL_NAME:-Orpheus-3b-FT-Q8_0.gguf}
@@ -38,8 +105,40 @@ else
   echo "Model already exists."
 fi
 
-# Set up environment variables
-cat > .env <<EOF
+# Check if we should download the Canary model
+if [[ "${CANARY_MODEL_ENABLED}" == "true" ]]; then
+  echo "Canary STT model will be downloaded at startup when required"
+fi
+
+# Set up environment variables - preserve existing .env if it exists
+if [ -f ".env" ]; then
+  echo "Existing .env file found, preserving and updating settings..."
+  
+  # Load existing .env values as defaults
+  if [ -f ".env" ]; then
+    export $(grep -v '^#' .env | xargs)
+  fi
+  
+  # Back up the existing file
+  cp .env .env.backup
+  
+  # Update CANARY_MODEL_ENABLED to true if we're running with it enabled
+  if [[ "${CANARY_MODEL_ENABLED}" == "true" ]]; then
+    sed -i 's/CANARY_MODEL_ENABLED=.*/CANARY_MODEL_ENABLED=true/g' .env
+    
+    # If the variable doesn't exist in the file, add it
+    if ! grep -q "CANARY_MODEL_ENABLED" .env; then
+      echo "# Canary STT Model Configuration" >> .env
+      echo "CANARY_MODEL_ENABLED=true" >> .env
+    fi
+    
+    echo "Updated .env with CANARY_MODEL_ENABLED=true"
+  fi
+  
+else
+  # Create new .env file if none exists
+  echo "Creating new .env file..."
+  cat > .env <<EOF
 # Orpheus-FastAPI Configuration
 ORPHEUS_API_URL=http://127.0.0.1:5006/v1/completions
 ORPHEUS_API_TIMEOUT=120
@@ -51,9 +150,13 @@ ORPHEUS_MODEL_NAME=$MODEL_NAME
 ORPHEUS_PORT=5005
 ORPHEUS_HOST=0.0.0.0
 
+# Canary STT Model Configuration
+CANARY_MODEL_ENABLED=${CANARY_MODEL_ENABLED:-true}
+
 # OpenAI API Configuration - Replace with your API key
 # OPENAI_API_KEY=your-openai-api-key-here
 EOF
+fi
 
 echo "Environment configured."
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Orpheus Voice Chat</title>
+    <title>AI Voice Chat</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -11,6 +11,12 @@
             margin: 0 auto;
             padding: 20px;
             background-color: #f5f5f5;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
         }
         h1 {
             color: #333;
@@ -208,7 +214,7 @@
     </style>
 </head>
 <body>
-    <h1>Orpheus Voice Chat with GPT-4o-mini</h1>
+    <h1>AI Voice Chat with GPT-4o-mini</h1>
     
     <div class="controls">
         <div class="voice-selector">
@@ -222,7 +228,23 @@
                 <option value="leo">Leo (Male, Deep)</option>
             </select>
         </div>
-        <button id="stop-btn" onclick="stopPlayback()" disabled>Stop Audio</button>
+        <div>
+            <button id="stop-btn" onclick="stopPlayback()" disabled>Stop Audio</button>
+            {% if stt_enabled %}
+            <button id="record-btn" onclick="toggleRecording()" style="background-color: #2196F3;">🎤 Start Recording</button>
+            {% else %}
+            <button disabled title="Speech-to-text is disabled. Check if NeMo is installed and CANARY_MODEL_ENABLED=true in server settings." style="background-color: #9e9e9e;">🎤 Speech Recognition Disabled</button>
+            <small style="display: block; margin-top: 5px; color: #f44336;">
+                Note: Speech recognition requires NeMo to be installed and CANARY_MODEL_ENABLED=true in .env
+            </small>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Recording status indicator -->
+    <div id="recording-status" style="display: none; text-align: center; margin: 10px 0; padding: 10px; background-color: #ffcdd2; border-radius: 4px; animation: pulse 1.5s infinite;">
+        <span style="font-weight: bold;">🔴 Recording your voice...</span>
+        <div id="recording-time" style="font-size: 14px; margin-top: 5px;">00:00</div>
     </div>
     
     <div class="chat-container">
@@ -287,6 +309,13 @@
         let scheduledSourceNodes = [];
         let nextPlayTime = 0;
         let isPlaying = false;
+        
+        // Speech recognition variables
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordingStartTime = 0;
+        let recordingTimer = null;
         
         // Timing metrics
         let chatStartTime = 0;
@@ -733,6 +762,304 @@
             }
             
             chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        // Toggle voice recording on/off
+        async function toggleRecording() {
+            if (!isRecording) {
+                // Start recording
+                try {
+                    // Reset audio chunks
+                    audioChunks = [];
+                    
+                    // Request microphone access
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    
+                    // Create media recorder
+                    mediaRecorder = new MediaRecorder(stream, { 
+                        mimeType: 'audio/webm',
+                        audioBitsPerSecond: 16000 // 16kHz to match Canary model expectations
+                    });
+                    
+                    // Handle data available event
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
+                    
+                    // Handle recording stop
+                    mediaRecorder.onstop = async () => {
+                        console.log("Recording stopped");
+                        
+                        // Update UI
+                        document.getElementById('recording-status').style.display = 'none';
+                        document.getElementById('record-btn').textContent = '🎤 Start Recording';
+                        document.getElementById('record-btn').style.backgroundColor = '#2196F3';
+                        
+                        // Process the recorded audio
+                        await processRecordedAudio();
+                        
+                        // Stop all tracks to release microphone
+                        stream.getTracks().forEach(track => track.stop());
+                        
+                        // Clear recording timer
+                        clearInterval(recordingTimer);
+                    };
+                    
+                    // Start recording
+                    mediaRecorder.start(100); // Collect data every 100ms
+                    isRecording = true;
+                    recordingStartTime = Date.now();
+                    
+                    // Update UI
+                    document.getElementById('recording-status').style.display = 'block';
+                    document.getElementById('record-btn').textContent = '⏹️ Stop Recording';
+                    document.getElementById('record-btn').style.backgroundColor = '#f44336';
+                    
+                    // Start recording timer
+                    startRecordingTimer();
+                    
+                } catch (error) {
+                    console.error('Error starting recording:', error);
+                    alert('Could not access microphone. Please check your permissions.');
+                }
+            } else {
+                // Stop recording
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                    isRecording = false;
+                }
+            }
+        }
+        
+        // Start a timer for recording duration
+        function startRecordingTimer() {
+            const timerElement = document.getElementById('recording-time');
+            recordingTimer = setInterval(() => {
+                const elapsedSeconds = Math.floor((Date.now() - recordingStartTime) / 1000);
+                const minutes = Math.floor(elapsedSeconds / 60).toString().padStart(2, '0');
+                const seconds = (elapsedSeconds % 60).toString().padStart(2, '0');
+                timerElement.textContent = `${minutes}:${seconds}`;
+                
+                // Auto-stop after 2 minutes to prevent huge files
+                if (elapsedSeconds >= 120) {
+                    toggleRecording();
+                }
+            }, 1000);
+        }
+        
+        // Process recorded audio and send to speech-to-text
+        async function processRecordedAudio() {
+            if (audioChunks.length === 0) {
+                console.log("No audio recorded");
+                return;
+            }
+            
+            try {
+                // Show sending indicator in UI
+                appendMessage("Processing your voice message...", "user");
+                
+                // Create blob from chunks
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                
+                // Convert to WAV format for the Canary model
+                const wavBlob = await convertToWav(audioBlob);
+                
+                // Convert to base64 for API
+                const base64Audio = await blobToBase64(wavBlob);
+                
+                // Send to our speech-to-text endpoint
+                const response = await fetch('/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        audio_data: base64Audio,
+                        model: "canary",
+                        source_lang: "en",
+                        target_lang: "en",
+                        pnc: true
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Speech recognition error: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log("Transcription result:", result);
+                
+                // Check if we got text back
+                if (result.text && result.text.trim()) {
+                    // Update the "Processing..." message with the actual transcription
+                    const chatMessages = document.getElementById('chat-messages');
+                    const lastMessage = chatMessages.lastElementChild;
+                    if (lastMessage && lastMessage.classList.contains('user-message')) {
+                        lastMessage.textContent = result.text;
+                    }
+                    
+                    // Process the transcribed text as a user message
+                    chatHistory.push({ role: "user", content: result.text });
+                    
+                    // Trigger the LLM and TTS response
+                    document.getElementById('typing-indicator').style.display = 'block';
+                    document.getElementById('send-btn').disabled = true;
+                    document.getElementById('stop-btn').disabled = false;
+                    
+                    // Reset metrics display
+                    document.getElementById('llm-ttfb').textContent = '-';
+                    document.getElementById('tts-ttfb').textContent = '-';
+                    document.getElementById('ttfa').textContent = '-';
+                    document.getElementById('total-time').textContent = '-';
+                    
+                    // Reset timeline visualization
+                    document.getElementById('timeline-llm').style.width = '0';
+                    document.getElementById('timeline-tts').style.width = '0';
+                    document.getElementById('timeline-total').style.width = '0';
+                    
+                    // Record start time for metrics
+                    chatStartTime = performance.now();
+                    
+                    try {
+                        // Resume audio context before API calls
+                        if (audioContext.state === "suspended") {
+                            await audioContext.resume();
+                        }
+                        
+                        // Stream from OpenAI and TTS in real-time
+                        await streamGptAndTts();
+                        
+                    } catch (error) {
+                        console.error('Error:', error);
+                        document.getElementById('typing-indicator').style.display = 'none';
+                        appendMessage('Sorry, there was an error processing your voice request.', 'assistant');
+                        document.getElementById('send-btn').disabled = false;
+                    }
+                } else {
+                    // No speech recognized
+                    const chatMessages = document.getElementById('chat-messages');
+                    const lastMessage = chatMessages.lastElementChild;
+                    if (lastMessage && lastMessage.classList.contains('user-message')) {
+                        lastMessage.textContent = "No speech detected. Please try again.";
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error processing audio:', error);
+                alert('Error processing audio: ' + error.message);
+                
+                // Update UI with error
+                const chatMessages = document.getElementById('chat-messages');
+                const lastMessage = chatMessages.lastElementChild;
+                if (lastMessage && lastMessage.classList.contains('user-message')) {
+                    lastMessage.textContent = "Error processing voice. Please try again.";
+                }
+            }
+        }
+        
+        // Convert blob to WAV format for Canary model
+        async function convertToWav(audioBlob) {
+            // For simplicity we'll use the Web Audio API to decode and re-encode
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            // Create a WAV encoder - we'll use a simple implementation
+            const wavEncoder = new WavEncoder(audioBuffer);
+            return wavEncoder.encode();
+        }
+        
+        // Simple WAV encoder
+        class WavEncoder {
+            constructor(audioBuffer) {
+                this.audioBuffer = audioBuffer;
+                this.sampleRate = audioBuffer.sampleRate;
+                this.numChannels = audioBuffer.numberOfChannels;
+            }
+            
+            encode() {
+                // Get PCM data from audio buffer
+                const pcmData = this.getPcmData();
+                
+                // Create WAV header
+                const header = this.createWavHeader(pcmData.byteLength);
+                
+                // Combine header and PCM data
+                const wavData = new Uint8Array(header.byteLength + pcmData.byteLength);
+                wavData.set(new Uint8Array(header), 0);
+                wavData.set(new Uint8Array(pcmData), header.byteLength);
+                
+                // Create blob with WAV data
+                return new Blob([wavData], { type: 'audio/wav' });
+            }
+            
+            getPcmData() {
+                // Get audio data from the first channel (mono)
+                const samples = this.audioBuffer.getChannelData(0);
+                
+                // Convert Float32Array to Int16Array (16-bit PCM)
+                const pcmData = new Int16Array(samples.length);
+                for (let i = 0; i < samples.length; i++) {
+                    pcmData[i] = Math.max(-32768, Math.min(32767, samples[i] * 32767));
+                }
+                
+                return pcmData.buffer;
+            }
+            
+            createWavHeader(dataLength) {
+                const buffer = new ArrayBuffer(44);
+                const view = new DataView(buffer);
+                
+                // RIFF identifier
+                this.writeString(view, 0, 'RIFF');
+                // File length minus RIFF identifier and file size field
+                view.setUint32(4, 36 + dataLength, true);
+                // RIFF type
+                this.writeString(view, 8, 'WAVE');
+                // Format chunk identifier
+                this.writeString(view, 12, 'fmt ');
+                // Format chunk length
+                view.setUint32(16, 16, true);
+                // Sample format (1 = PCM)
+                view.setUint16(20, 1, true);
+                // Channel count
+                view.setUint16(22, 1, true); // Mono
+                // Sample rate
+                view.setUint32(24, this.sampleRate, true);
+                // Byte rate (sample rate * block align)
+                view.setUint32(28, this.sampleRate * 2, true);
+                // Block align (channel count * bytes per sample)
+                view.setUint16(32, 2, true);
+                // Bits per sample
+                view.setUint16(34, 16, true);
+                // Data chunk identifier
+                this.writeString(view, 36, 'data');
+                // Data chunk length
+                view.setUint32(40, dataLength, true);
+                
+                return buffer;
+            }
+            
+            writeString(view, offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+        }
+        
+        // Convert blob to base64
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const dataUrl = reader.result;
+                    const base64 = dataUrl.split(',')[1];
+                    resolve(base64);
+                };
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(blob);
+            });
         }
     </script>
 </body>

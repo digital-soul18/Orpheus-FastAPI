@@ -6,6 +6,7 @@
 - Run single test: `pytest tests/test_speechpipe.py::test_function_name -v`
 - Docker: `docker compose up --build`
 - Create env file: `cp .env.example .env`
+- RunPod with STT: `CANARY_MODEL_ENABLED=true ./runpod_setup.sh`
 
 ## Code Style Guidelines
 - **Imports**: Standard lib → third-party → local (grouped, alphabetical)
@@ -16,6 +17,8 @@
 - **Documentation**: Docstrings for functions and classes (Google style)
 - **Constants**: UPPER_CASE, defined at module level
 - **Async**: Use async/await pattern for FastAPI routes and streaming
+- **Code Structure**: Don't create separate standalone scripts; modify existing ones when possible
+- **File Creation**: Always ask before creating new script files or configuration files
 
 ## Performance Patterns
 - Use caching for repeated operations

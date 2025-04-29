@@ -14,6 +14,9 @@ import struct
 import json
 import numpy as np
 import httpx
+import base64
+import tempfile
+import torch
 
 # Function to ensure .env file exists
 def ensure_env_file_exists():
@@ -66,16 +69,53 @@ from tts_engine import (
     SAMPLE_RATE  # Added for WAV header generation
 )
 
+# Try to import Canary model for speech recognition if available
+try:
+    from nemo.collections.asr.models import EncDecMultiTaskModel
+    CANARY_AVAILABLE = True
+except ImportError:
+    print("⚠️ NeMo not installed. Speech-to-text capabilities will be disabled.")
+    print("   To enable, install NeMo with: pip install git+https://github.com/NVIDIA/NeMo.git@r2.3.0#egg=nemo_toolkit[asr]")
+    EncDecMultiTaskModel = None
+    CANARY_AVAILABLE = False
+
 # Create FastAPI app
 app = FastAPI(
     title="Orpheus-FASTAPI",
-    description="High-performance Text-to-Speech server using Orpheus-FASTAPI",
-    version="1.0.0"
+    description="High-performance Text-to-Speech server with STT capabilities using Orpheus and Canary models",
+    version="1.1.0"
 )
+
+# Global variable to hold the Canary model instance
+canary_model = None
 
 # We'll use FastAPI's built-in startup complete mechanism
 # The log message "INFO:     Application startup complete." indicates
 # that the application is ready
+
+@app.on_event("startup")
+async def startup_event():
+    """Load the Canary STT model on startup"""
+    global canary_model
+    
+    # Skip if NeMo isn't available
+    if not CANARY_AVAILABLE:
+        print("⚠️ Canary model loading skipped - NeMo package not installed")
+        return
+    
+    try:
+        if "CANARY_MODEL_ENABLED" in os.environ and os.environ["CANARY_MODEL_ENABLED"].lower() == "true":
+            print("🔄 Loading Canary speech recognition model...")
+            # Determine device (CUDA if available, otherwise CPU)
+            map_location = 'cuda' if torch.cuda.is_available() else 'cpu'
+            canary_model = EncDecMultiTaskModel.from_pretrained('nvidia/canary-1b-flash', map_location=map_location)
+            print("✅ Canary model loaded successfully on", map_location.upper())
+        else:
+            print("⚠️ Canary model loading is disabled (set CANARY_MODEL_ENABLED=true to enable)")
+    except Exception as e:
+        print(f"❌ Error loading Canary model: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Ensure directories exist
 os.makedirs("outputs", exist_ok=True)
@@ -103,6 +143,14 @@ class StreamingSpeechRequest(BaseModel):
     response_format: str = "wav"
     speed: float = 1.0
     
+class SpeechToTextRequest(BaseModel):
+    audio_data: str  # Base64 encoded WAV data
+    model: str = "canary"
+    source_lang: str = "en"
+    target_lang: str = "en"
+    pnc: bool = True
+    timestamps: bool = False
+    
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -122,6 +170,13 @@ class APIResponse(BaseModel):
     voice: str
     output_file: str
     generation_time: float
+    
+class SpeechToTextResponse(BaseModel):
+    text: str
+    source_lang: str
+    target_lang: str
+    processing_time: float
+    timestamps: Optional[Dict] = None
 
 # Cache for WAV headers to avoid regenerating them for each request
 WAV_HEADER_CACHE: Dict[Tuple[int, int, int], bytes] = {}
@@ -357,6 +412,81 @@ async def list_voices():
             "voices": AVAILABLE_VOICES
         }
     )
+    
+@app.post("/v1/audio/transcriptions", response_model=SpeechToTextResponse)
+async def transcribe_speech(request: SpeechToTextRequest):
+    """
+    Transcribe speech from audio using the Canary speech recognition model.
+    
+    Accepts base64-encoded WAV audio data and returns the transcribed text.
+    Supports multiple languages and options for timestamps.
+    """
+    global canary_model
+    
+    # Check if NeMo is available
+    if not CANARY_AVAILABLE:
+        raise HTTPException(
+            status_code=503, 
+            detail="Speech recognition is not available. NeMo is not installed."
+        )
+    
+    # Check if the model is loaded
+    if canary_model is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="Speech recognition model not loaded. Set CANARY_MODEL_ENABLED=true in .env to enable."
+        )
+    
+    try:
+        # Start timing
+        start_time = time.time()
+        
+        # Decode the base64 audio data
+        audio_bytes = base64.b64decode(request.audio_data)
+        
+        # Save to temporary file for processing
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            temp_file_path = temp_file.name
+            temp_file.write(audio_bytes)
+        
+        try:
+            # Process with Canary model
+            transcript = canary_model.transcribe(
+                audio=[temp_file_path],
+                batch_size=1,
+                source_lang=request.source_lang,
+                target_lang=request.target_lang,
+                pnc=str(request.pnc),
+                timestamps=request.timestamps
+            )
+            
+            # Get processing time
+            processing_time = time.time() - start_time
+            
+            # Prepare response
+            response_data = {
+                "text": transcript[0].text if transcript else "",
+                "source_lang": request.source_lang,
+                "target_lang": request.target_lang,
+                "processing_time": round(processing_time, 3)
+            }
+            
+            # Add timestamps if requested
+            if request.timestamps and transcript and hasattr(transcript[0], 'timestamp'):
+                response_data["timestamps"] = transcript[0].timestamp
+            
+            return response_data
+            
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+                
+    except Exception as e:
+        print(f"Error in speech transcription: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing speech: {str(e)}")
 
 # Legacy API endpoint for compatibility
 @app.post("/speak")
@@ -515,6 +645,21 @@ async def stream_demo(request: Request):
         {
             "request": request,
             "voices": AVAILABLE_VOICES
+        }
+    )
+
+@app.get("/voice-chat", response_class=HTMLResponse)
+async def voice_chat_ui(request: Request):
+    """Voice chat UI with speech-to-text and text-to-speech capabilities"""
+    # Check if the STT model is enabled and available
+    stt_enabled = CANARY_AVAILABLE and canary_model is not None
+    
+    return templates.TemplateResponse(
+        "voice_chat.html",
+        {
+            "request": request,
+            "voices": AVAILABLE_VOICES,
+            "stt_enabled": stt_enabled
         }
     )
 
